@@ -114,10 +114,10 @@
       vibeTags: ['Raw', 'Utilitarian', 'Street', 'Minimal'],
       imagery: [{ id: 1, bg: '#2B2B2E' }],
       photos: [
-        { id: 1, label: 'Cargo Pant — Front' },
-        { id: 2, label: 'Raw Hoodie — Detail' },
-        { id: 3, label: 'Studio — Lookbook' },
-        { id: 4, label: 'Utility Vest — Flat Lay' }
+        { id: 1, label: 'Cargo Pant - Front', role: 'product' },
+        { id: 2, label: 'Raw Hoodie - Detail', role: 'product' },
+        { id: 3, label: 'Studio - Lookbook', role: 'lifestyle' },
+        { id: 4, label: 'Utility Vest - Flat Lay', role: 'product' }
       ]
     };
   }
@@ -134,7 +134,7 @@
       newTagValue: '',
       brand: defaultBrand(),
       topic: 'New drop: restocked cargo pants + raw-edge hoodie',
-      ideaCount: 5,
+      ideaCount: 3,
       ideasLoading: false,
       ideas: [],
       openIdeaId: null,
@@ -160,6 +160,13 @@
     (base.brand.imagery || []).forEach(function (im) { if (im.id > maxId) maxId = im.id; });
     (base.ideas || []).forEach(function (i) { if (i.id > maxId) maxId = i.id; });
     uid = maxId + 1;
+    base.ideaCount = Math.max(3, Math.min(10, Number(base.ideaCount) || 3));
+    base.brand.photos = (base.brand.photos || []).map(function (p) {
+      return Object.assign({ label: 'Untitled asset', role: 'reference', dataUrl: null }, p, { role: p.role || 'product' });
+    });
+    base.ideas = (base.ideas || []).map(function (idea) {
+      return Object.assign({ renderPrompt: '' }, idea, { frameCount: Math.max(3, Number(idea.frameCount) || 3) });
+    });
 
     return base;
   }
@@ -182,6 +189,7 @@
 
   var state = loadState();
   var root = document.getElementById('app');
+  var eventsBound = false;
 
   function set(patch) {
     if (typeof patch === 'function') patch = patch(state);
@@ -197,13 +205,30 @@
   function updateBrand(patch) {
     set({ brand: Object.assign({}, state.brand, typeof patch === 'function' ? patch(state.brand) : patch) });
   }
+  function updateBrandSilent(patch) {
+    setSilent({ brand: Object.assign({}, state.brand, typeof patch === 'function' ? patch(state.brand) : patch) });
+  }
   function updateIdea(id, patch) {
     set({ ideas: state.ideas.map(function (i) { return i.id === id ? Object.assign({}, i, patch) : i; }) });
+  }
+  function updateIdeaPartial(id, patch) {
+    updateIdeaSilent(id, patch);
+    renderIdeaSurfaces(id);
   }
   function updateIdeaSilent(id, patch) {
     setSilent({ ideas: state.ideas.map(function (i) { return i.id === id ? Object.assign({}, i, patch) : i; }) });
   }
   function findIdea(id) { return state.ideas.find(function (i) { return i.id === id; }); }
+
+  function buildDefaultRenderPrompt(idea, brand) {
+    var assets = (brand.photos || []).map(function (p) {
+      return (p.label || 'Untitled asset') + ' [' + (p.role || 'reference') + ']';
+    }).join('; ');
+    return 'Create a premium Instagram carousel slide for ' + brand.name + '. ' +
+      'Concept: ' + idea.concept + '. ' +
+      'Use the uploaded assets intentionally by label and role: ' + (assets || 'none') + '. ' +
+      'Keep text bold, legible, and minimal. Match the brand colors and editorial direction.';
+  }
 
   // ---- actions ----
 
@@ -262,9 +287,9 @@
       var label = humanizeFilename(file.name);
       if (target.kind === 'photo') {
         if (target.id == null) {
-          updateBrand(function (b) { return { photos: b.photos.concat([{ id: nextId(), label: label, dataUrl: dataUrl }]) }; });
+          updateBrand(function (b) { return { photos: b.photos.concat([{ id: nextId(), label: label, role: 'product', dataUrl: dataUrl }]) }; });
         } else {
-          updateBrand(function (b) { return { photos: b.photos.map(function (p) { return p.id === target.id ? Object.assign({}, p, { label: label, dataUrl: dataUrl }) : p; }) }; });
+          updateBrand(function (b) { return { photos: b.photos.map(function (p) { return p.id === target.id ? Object.assign({}, p, { label: label, role: p.role || 'product', dataUrl: dataUrl }) : p; }) }; });
         }
       } else {
         if (target.id == null) {
@@ -297,13 +322,14 @@
     }).then(parseJsonResponse).then(function (result) {
       if (!result.ok) throw new Error((result.data && result.data.error) || 'Failed to generate ideas.');
       var ideas = (result.data.ideas || []).map(function (c) {
-        return {
+        var idea = {
           id: nextId(),
           tag: c.tag,
           title: c.title,
           concept: c.concept,
           caption: c.caption,
-          frameCount: 4 + Math.floor(Math.random() * 3),
+          frameCount: 3,
+          renderPrompt: '',
           expanded: true,
           imagesStatus: 'none',
           frames: [],
@@ -317,6 +343,8 @@
           schedulePlatform: 'Instagram Feed',
           scheduledLabel: ''
         };
+        idea.renderPrompt = buildDefaultRenderPrompt(idea, state.brand);
+        return idea;
       });
       set({ ideas: ideas, ideasLoading: false });
     }).catch(function (err) {
@@ -339,26 +367,29 @@
   // gpt-image-2 can take longer than any serverless function is allowed to run,
   // so rendering is submit-then-poll: /api/render-carousel just enqueues one Fal
   // job per slide and returns immediately; /api/render-status is polled every
-  // ~2.5s until every slide is complete or failed.
-  var RENDER_POLL_INTERVAL_MS = 2500;
-  var RENDER_MAX_POLLS = 48; // ~2 minutes of polling before giving up client-side
+  // ~3s until every slide is complete or failed. GPT image edits can sit
+  // IN_PROGRESS for several minutes, so avoid turning healthy Fal jobs into
+  // fake client-side failures too early.
+  var RENDER_POLL_INTERVAL_MS = 3000;
+  var RENDER_MAX_POLLS = 160; // ~8 minutes of polling before giving up client-side
 
   function onMakeImages(id) {
     var idea = findIdea(id);
     if (!idea) return;
     var brand = state.brand;
-    updateIdea(id, { imagesStatus: 'generating', renderError: null, frames: [] });
+    var renderPrompt = (idea.renderPrompt || '').trim() || buildDefaultRenderPrompt(idea, brand);
+    updateIdeaPartial(id, { imagesStatus: 'generating', renderError: null, renderPrompt: renderPrompt, frames: [] });
 
     fetch('/api/render-carousel', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        idea: { title: idea.title, concept: idea.concept },
+        idea: { title: idea.title, concept: idea.concept, renderPrompt: renderPrompt },
         frameCount: idea.frameCount,
         brand: {
           name: brand.name,
           colors: brand.colors,
-          photos: brand.photos.map(function (p) { return { id: p.id, label: p.label, dataUrl: p.dataUrl || null }; })
+          photos: brand.photos.map(function (p) { return { id: p.id, label: p.label, role: p.role || 'reference', dataUrl: p.dataUrl || null }; })
         }
       })
     }).then(parseJsonResponse).then(function (result) {
@@ -366,12 +397,91 @@
       var slides = result.data.slides || [];
       if (!slides.length) throw new Error('No slides were submitted.');
       var frames = slides.map(function (s) {
-        return { n: s.n, hook: s.hook, photoLabel: s.photoLabel, endpoint: s.endpoint, requestId: s.requestId, imageUrl: null, status: 'pending', error: null };
+        return { n: s.n, hook: s.hook, photoId: s.photoId, photoLabel: s.photoLabel, photoRole: s.photoRole, prompt: s.prompt, endpoint: s.endpoint, requestId: s.requestId, imageUrl: null, status: 'pending', error: null };
       });
-      updateIdea(id, { frames: frames });
+      updateIdeaPartial(id, { frames: frames });
       pollRenderStatus(id, 0);
     }).catch(function (err) {
-      updateIdea(id, { imagesStatus: 'none', renderError: err.message });
+      updateIdeaPartial(id, { imagesStatus: 'none', renderError: err.message });
+    });
+  }
+
+  function retrySlide(id, slideNumber) {
+    var idea = findIdea(id);
+    if (!idea) return;
+    var frame = (idea.frames || []).find(function (f) { return f.n === slideNumber; });
+    if (!frame) return;
+    submitRetrySlides(id, [frame]);
+  }
+
+  function retryFailedSlides(id) {
+    var idea = findIdea(id);
+    if (!idea) return;
+    var failed = (idea.frames || []).filter(function (f) { return f.status === 'failed'; });
+    if (!failed.length) return;
+    submitRetrySlides(id, failed);
+  }
+
+  function submitRetrySlides(id, framesToRetry) {
+    var idea = findIdea(id);
+    if (!idea) return;
+    var brand = state.brand;
+    var retryNumbers = framesToRetry.map(function (f) { return f.n; });
+    var renderPrompt = (idea.renderPrompt || '').trim() || buildDefaultRenderPrompt(idea, brand);
+    var queuedFrames = (idea.frames || []).map(function (f) {
+      return retryNumbers.indexOf(f.n) !== -1
+        ? Object.assign({}, f, { status: 'submitting', error: null, imageUrl: null, prompt: renderPrompt })
+        : f;
+    });
+    updateIdeaPartial(id, { imagesStatus: 'generating', renderError: null, renderPrompt: renderPrompt, frames: queuedFrames });
+
+    Promise.all(framesToRetry.map(function (frame) {
+      return fetch('/api/render-slide', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          idea: { title: idea.title, concept: idea.concept, renderPrompt: renderPrompt },
+          brand: {
+            name: brand.name,
+            colors: brand.colors,
+            photos: brand.photos.map(function (p) { return { id: p.id, label: p.label, role: p.role || 'reference', dataUrl: p.dataUrl || null }; })
+          },
+          slide: { n: frame.n, hook: frame.hook || ('SLIDE ' + frame.n), photoId: frame.photoId || null }
+        })
+      }).then(parseJsonResponse).then(function (result) {
+        if (!result.ok) throw new Error((result.data && result.data.error) || 'Failed to retry slide ' + frame.n + '.');
+        return result.data.slide;
+      });
+    })).then(function (slides) {
+      var current = findIdea(id);
+      if (!current) return;
+      var merged = current.frames.map(function (f) {
+        var s = slides.find(function (x) { return x.n === f.n; });
+        if (!s) return f;
+        return Object.assign({}, f, {
+          hook: s.hook,
+          photoId: s.photoId,
+          photoLabel: s.photoLabel,
+          photoRole: s.photoRole,
+          prompt: s.prompt,
+          endpoint: s.endpoint,
+          requestId: s.requestId,
+          imageUrl: null,
+          status: 'pending',
+          error: null
+        });
+      });
+      updateIdeaPartial(id, { frames: merged });
+      pollRenderStatus(id, 0);
+    }).catch(function (err) {
+      var current = findIdea(id);
+      if (!current) return;
+      var failedFrames = current.frames.map(function (f) {
+        return retryNumbers.indexOf(f.n) !== -1 && f.status === 'submitting'
+          ? Object.assign({}, f, { status: 'failed', error: err.message })
+          : f;
+      });
+      updateIdeaPartial(id, { frames: failedFrames, imagesStatus: 'ready', renderError: err.message });
     });
   }
 
@@ -384,9 +494,9 @@
 
     if (attempt >= RENDER_MAX_POLLS) {
       var timedOutFrames = idea.frames.map(function (f) {
-        return f.status === 'pending' ? Object.assign({}, f, { status: 'failed', error: 'Timed out waiting for Fal.' }) : f;
+        return f.status === 'pending' ? Object.assign({}, f, { status: 'failed', error: 'Timed out waiting for Fal after 8 minutes. The job may still be running; retry this slide.' }) : f;
       });
-      updateIdea(id, { frames: timedOutFrames });
+      updateIdeaPartial(id, { frames: timedOutFrames });
       finishRender(id);
       return;
     }
@@ -407,14 +517,14 @@
         if (u.status === 'failed') return Object.assign({}, f, { status: 'failed', error: u.error });
         return f;
       });
-      updateIdea(id, { frames: merged });
+      updateIdeaPartial(id, { frames: merged });
       if (merged.some(function (f) { return f.status === 'pending'; })) {
         setTimeout(function () { pollRenderStatus(id, attempt + 1); }, RENDER_POLL_INTERVAL_MS);
       } else {
         finishRender(id);
       }
     }).catch(function (err) {
-      updateIdea(id, { imagesStatus: 'none', renderError: err.message });
+      updateIdeaPartial(id, { imagesStatus: 'none', renderError: err.message });
     });
   }
 
@@ -424,9 +534,13 @@
     var frames = idea.frames || [];
     var allFailed = frames.length > 0 && frames.every(function (f) { return f.status === 'failed'; });
     if (allFailed) {
-      updateIdea(id, { imagesStatus: 'none', renderError: 'All slides failed to render — see errors above and try again.' });
+      var firstError = (frames.find(function (f) { return f.error; }) || {}).error;
+      updateIdeaPartial(id, {
+        imagesStatus: 'none',
+        renderError: 'All slides failed to render. First error: ' + (firstError || 'No Fal error was returned.')
+      });
     } else {
-      updateIdea(id, { imagesStatus: 'ready' });
+      updateIdeaPartial(id, { imagesStatus: 'ready' });
     }
   }
 
@@ -479,6 +593,7 @@
       title: idea.title,
       concept: idea.concept,
       caption: idea.caption,
+      renderPrompt: idea.renderPrompt || buildDefaultRenderPrompt(idea, brand),
       frameCount: idea.frameCount,
       expanded: idea.expanded,
       visualBg: 'linear-gradient(160deg, ' + colorA + ' 0%, ' + colorA + ' 55%, ' + colorB + ' 55%, ' + colorB + ' 100%)',
@@ -494,6 +609,7 @@
       approveToggleLabel: idea.approved ? '✓ Approved' : 'Approve',
       approveLabel: idea.approved ? 'Approved' : 'Not approved yet',
       frames: frames,
+      failedFrameCount: (idea.frames || []).filter(function (f) { return f.status === 'failed'; }).length,
       scheduleDate: idea.scheduleDate,
       scheduleTime: idea.scheduleTime,
       scheduleError: idea.scheduleError,
@@ -524,6 +640,28 @@
       '</div>';
 
     bindEvents();
+  }
+
+  function renderIdeaSurfaces(id) {
+    var theme = state.darkMode ? DARK_THEME : LIGHT_THEME;
+    var brand = state.brand;
+    var ideaIndex = state.ideas.findIndex(function (i) { return i.id === id; });
+    if (ideaIndex === -1) return;
+    var card = makeCard(state.ideas[ideaIndex], ideaIndex, brand, theme);
+    var cardEl = root.querySelector('[data-idea-card-id="' + id + '"]');
+    if (cardEl) {
+      var wrapper = document.createElement('div');
+      wrapper.innerHTML = renderIdeaCard(theme, card);
+      cardEl.replaceWith(wrapper.firstChild);
+    }
+    if (state.openIdeaId === id) {
+      var modalEl = root.querySelector('[data-modal-shell]');
+      if (modalEl) {
+        var modalWrap = document.createElement('div');
+        modalWrap.innerHTML = renderModal(theme, card);
+        modalEl.replaceWith(modalWrap.firstChild);
+      }
+    }
   }
 
   function renderConfigBanner(cs) {
@@ -578,6 +716,12 @@
     '</div>';
   }
 
+  function renderRoleOptions(activeRole) {
+    return ['product', 'logo', 'lifestyle', 'texture', 'reference'].map(function (role) {
+      return '<option value="' + role + '"' + ((activeRole || 'reference') === role ? ' selected' : '') + '>' + role + '</option>';
+    }).join('');
+  }
+
   function renderSidebar(theme, brand, fontPair) {
     var width = state.sidebarCollapsed ? 56 : 300;
     var inner;
@@ -616,12 +760,16 @@
 
       var photos = brand.photos.map(function (p, i) {
         var pBg = p.dataUrl ? ('background-image:url(' + p.dataUrl + '); background-size:cover; background-position:center;') : ('background:' + PHOTO_BGS[i % PHOTO_BGS.length] + ';');
-        return '<div class="rs-photo-tile" style="position:relative; aspect-ratio:1; border-radius:10px; overflow:hidden; ' + pBg + ' border:1px solid ' + theme.border + ';">' +
-          '<div style="position:absolute; inset:0; display:flex; align-items:flex-end; padding:6px; font-family:\'Work Sans\',sans-serif; font-size:9px; color:#fff; text-transform:uppercase; letter-spacing:0.03em; text-shadow:0 1px 3px rgba(0,0,0,0.5);">' + esc(p.label) + '</div>' +
-          '<div class="rs-overlay" style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; gap:6px; background:rgba(0,0,0,0.42);">' +
-            '<div data-action="replace-photo" data-id="' + p.id + '" style="background:#fff; color:#173F35; font-size:11px; font-weight:700; padding:5px 8px; border-radius:6px; cursor:pointer;">Replace</div>' +
-            '<div data-action="remove-photo" data-id="' + p.id + '" style="background:rgba(255,255,255,0.92); color:' + ACCENT + '; font-size:11px; font-weight:700; padding:5px 8px; border-radius:6px; cursor:pointer;">Remove</div>' +
+        return '<div style="display:flex; flex-direction:column; gap:6px;">' +
+          '<div class="rs-photo-tile" style="position:relative; aspect-ratio:1; border-radius:10px; overflow:hidden; ' + pBg + ' border:1px solid ' + theme.border + ';">' +
+            '<div style="position:absolute; inset:0; display:flex; align-items:flex-end; padding:6px; font-family:\'Work Sans\',sans-serif; font-size:9px; color:#fff; text-transform:uppercase; letter-spacing:0.03em; text-shadow:0 1px 3px rgba(0,0,0,0.5);">' + esc(p.label) + '</div>' +
+            '<div class="rs-overlay" style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; gap:6px; background:rgba(0,0,0,0.42);">' +
+              '<div data-action="replace-photo" data-id="' + p.id + '" style="background:#fff; color:#173F35; font-size:11px; font-weight:700; padding:5px 8px; border-radius:6px; cursor:pointer;">Replace</div>' +
+              '<div data-action="remove-photo" data-id="' + p.id + '" style="background:rgba(255,255,255,0.92); color:' + ACCENT + '; font-size:11px; font-weight:700; padding:5px 8px; border-radius:6px; cursor:pointer;">Remove</div>' +
+            '</div>' +
           '</div>' +
+          '<input data-bind="asset-label" data-id="' + p.id + '" value="' + esc(p.label) + '" style="width:100%; min-width:0; font-size:11px; padding:6px 7px; border:1px solid ' + theme.border + '; border-radius:7px; background:' + theme.inputBg + '; color:' + theme.text + ';" />' +
+          '<select data-bind="asset-role" data-id="' + p.id + '" style="width:100%; min-width:0; font-size:11px; padding:6px 7px; border:1px solid ' + theme.border + '; border-radius:7px; background:' + theme.inputBg + '; color:' + theme.text + ';">' + renderRoleOptions(p.role) + '</select>' +
         '</div>';
       }).join('');
 
@@ -667,7 +815,7 @@
             '</div>' +
           '</div>' +
           '<div>' +
-            '<div style="font:var(--text-utility-xs); color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:8px;">Products</div>' +
+            '<div style="font:var(--text-utility-xs); color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:8px;">Uploaded assets</div>' +
             '<div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">' +
               photos +
               '<div data-action="add-photo" style="aspect-ratio:1; border-radius:10px; border:1px dashed ' + theme.border + '; display:flex; align-items:center; justify-content:center; cursor:pointer; color:' + theme.muted + '; font-size:20px; font-weight:300;">＋</div>' +
@@ -777,7 +925,9 @@
             '<div style="font:var(--text-utility-xs); color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:9px;">Suggested caption</div>' +
             '<textarea data-bind="caption" data-id="' + c.id + '" rows="5" style="width:100%; resize:none; font-family:inherit; font-size:13px; padding:11px 13px; border:1px solid ' + theme.border + '; border-radius:10px; background:' + theme.inputBg + '; color:' + theme.text + '; margin-bottom:12px;">' + esc(c.caption) + '</textarea>' +
             '<div style="font:var(--text-utility-xs); color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px;">Written idea</div>' +
-            '<div style="font-size:12.5px; color:' + theme.muted + '; line-height:1.5;">' + esc(c.concept) + '</div>' +
+            '<div style="font-size:12.5px; color:' + theme.muted + '; line-height:1.5; margin-bottom:12px;">' + esc(c.concept) + '</div>' +
+            '<div style="font:var(--text-utility-xs); color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px;">Render prompt</div>' +
+            '<textarea data-bind="render-prompt" data-id="' + c.id + '" rows="5" style="width:100%; resize:vertical; font-family:inherit; font-size:12.5px; line-height:1.45; padding:10px 12px; border:1px solid ' + theme.border + '; border-radius:10px; background:' + theme.inputBg + '; color:' + theme.text + ';">' + esc(c.renderPrompt) + '</textarea>' +
           '</div>' +
           '<div>' +
             '<div style="font:var(--text-utility-xs); color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:9px;">Photos</div>' +
@@ -791,6 +941,7 @@
               '</div>' +
             '</div>' +
             actionBlock +
+            (c.failedFrameCount ? '<div data-action="retry-failed" data-id="' + c.id + '" style="text-align:center; padding:9px 10px; border-radius:999px; border:1px solid #C0392B; color:#C0392B; font-size:12px; font-weight:700; cursor:pointer; margin-top:8px;">Retry failed slides</div>' : '') +
             (c.renderError ? '<div style="font-size:11.5px; color:#C0392B; margin-top:8px; line-height:1.4;">' + esc(c.renderError) + '</div>' : '') +
           '</div>' +
         '</div>' +
@@ -804,7 +955,7 @@
       '</div>';
     }
 
-    return '<div style="background:' + theme.cardBg + '; border:1px solid ' + theme.border + '; box-shadow:' + theme.shadow + '; border-radius:16px; overflow:hidden; animation:rs-fadeIn 0.25s ease;">' +
+    return '<div data-idea-card-id="' + c.id + '" style="background:' + theme.cardBg + '; border:1px solid ' + theme.border + '; box-shadow:' + theme.shadow + '; border-radius:16px; overflow:hidden;">' +
       '<div data-action="toggle-expand" data-id="' + c.id + '" style="display:flex; align-items:center; gap:12px; padding:16px 20px; cursor:pointer;">' +
         '<div style="color:' + theme.muted + '; font-size:12px; width:14px; text-align:center; transform:' + caret + '; transition:transform 0.15s ease;">▾</div>' +
         '<div style="width:26px; height:26px; border-radius:6px; background:' + theme.text + '; color:' + theme.bg + '; display:flex; align-items:center; justify-content:center; font-family:\'Anton\',sans-serif; font-size:13px; flex-shrink:0;">' + c.n + '</div>' +
@@ -821,7 +972,7 @@
         ? ('background-image:url(' + fr.imageUrl + '); background-size:cover; background-position:center;')
         : ('background:' + (fr.bg || theme.inputBg) + ';');
       var overlay = '';
-      if (!fr.imageUrl && fr.status === 'pending') {
+      if (!fr.imageUrl && (fr.status === 'pending' || fr.status === 'submitting')) {
         overlay = '<div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center;">' +
           '<span style="width:18px; height:18px; border-radius:50%; border:2px solid ' + theme.border + '; border-top-color:' + ACCENT + '; display:inline-block; animation:rs-spin 0.7s linear infinite;"></span>' +
         '</div>';
@@ -836,10 +987,23 @@
           '<div style="font-size:8.5px; letter-spacing:0.06em; color:rgba(255,255,255,0.8); text-transform:uppercase;">' + esc(fr.photoLabel) + '</div>' +
         '</div>'
       ) : '';
-      return '<div style="width:200px; flex-shrink:0; aspect-ratio:4/5; border-radius:12px; position:relative; overflow:hidden; ' + bgStyle + ' border:1px solid ' + theme.border + ';">' +
-        '<div style="position:absolute; top:10px; left:10px; background:rgba(255,255,255,0.9); color:#173F35; font-size:11px; font-weight:700; padding:2px 8px; border-radius:999px;">' + fr.n + '</div>' +
-        overlay +
-        textOverlay +
+      var statusColor = fr.status === 'failed' ? '#C0392B' : (fr.status === 'complete' ? ACCENT : theme.muted);
+      return '<div style="width:220px; flex-shrink:0; display:flex; flex-direction:column; gap:9px;">' +
+        '<div style="aspect-ratio:4/5; border-radius:12px; position:relative; overflow:hidden; ' + bgStyle + ' border:1px solid ' + theme.border + ';">' +
+          '<div style="position:absolute; top:10px; left:10px; background:rgba(255,255,255,0.9); color:#173F35; font-size:11px; font-weight:700; padding:2px 8px; border-radius:999px;">' + fr.n + '</div>' +
+          overlay +
+          textOverlay +
+        '</div>' +
+        '<div style="font-size:11.5px; line-height:1.45; color:' + theme.muted + '; display:flex; flex-direction:column; gap:5px;">' +
+          '<div style="font-weight:800; color:' + statusColor + '; text-transform:uppercase; letter-spacing:0.04em;">' + esc(fr.status || 'draft') + '</div>' +
+          '<div><strong style="color:' + theme.text + ';">Asset:</strong> ' + esc(fr.photoLabel || 'None') + (fr.photoRole ? ' <span style="color:' + theme.muted + ';">(' + esc(fr.photoRole) + ')</span>' : '') + '</div>' +
+          '<details style="border:1px solid ' + theme.border + '; border-radius:8px; padding:7px 8px; background:' + theme.inputBg + ';">' +
+            '<summary style="cursor:pointer; font-weight:700; color:' + theme.text + ';">Prompt</summary>' +
+            '<div style="margin-top:6px; white-space:pre-wrap; color:' + theme.muted + ';">' + esc(fr.prompt || c.renderPrompt || '') + '</div>' +
+          '</details>' +
+          (fr.error ? '<div style="color:#C0392B;"><strong>Error:</strong> ' + esc(fr.error) + '</div>' : '') +
+          (fr.status === 'failed' ? '<div data-action="retry-slide" data-id="' + c.id + '" data-slide="' + fr.n + '" style="align-self:flex-start; padding:7px 11px; border-radius:999px; border:1px solid #C0392B; color:#C0392B; font-weight:800; cursor:pointer;">Retry slide</div>' : '') +
+        '</div>' +
       '</div>';
     }).join('');
 
@@ -862,6 +1026,9 @@
         '<div style="font-size:13.5px; font-weight:700; color:' + c.approveColor + ';">' + c.approveLabel + '</div>' +
         '<div data-action="toggle-approve" data-id="' + c.id + '" style="font-size:12.5px; font-weight:700; color:' + ACCENT + '; cursor:pointer;">' + c.approveToggleLabel + '</div>' +
       '</div>';
+    }
+    if (c.failedFrameCount) {
+      actionSection += '<div data-action="retry-failed" data-id="' + c.id + '" style="align-self:flex-start; padding:11px 20px; border-radius:999px; border:1px solid #C0392B; color:#C0392B; font-weight:800; font-size:13px; cursor:pointer;">Retry failed slides</div>';
     }
     if (c.scheduled) {
       actionSection += '<div style="display:flex; align-items:center; gap:10px; background:' + theme.achievementBg + '; border:1px solid ' + theme.achievementBorder + '; border-radius:12px; padding:15px 17px;">' +
@@ -898,7 +1065,7 @@
       actionSection += '<div data-action="open-schedule" data-id="' + c.id + '" style="align-self:flex-start; padding:12px 24px; border-radius:999px; background:' + ACCENT + '; color:#fff; font-weight:700; font-size:13.5px; cursor:pointer;">Schedule</div>';
     }
 
-    return '<div data-action="close-modal" style="position:fixed; inset:0; background:rgba(14,41,33,0.55); z-index:100; display:flex; align-items:center; justify-content:center; padding:32px; animation:rs-fadeIn 0.2s ease;">' +
+    return '<div data-modal-shell data-action="close-modal" style="position:fixed; inset:0; background:rgba(14,41,33,0.55); z-index:100; display:flex; align-items:center; justify-content:center; padding:32px;">' +
       '<div style="background:' + theme.cardBg + '; border:1px solid ' + theme.border + '; box-shadow:' + theme.shadowRaised + '; border-radius:20px; width:min(960px, 100%); max-height:88vh; overflow-y:auto; padding:30px 34px;">' +
         '<div style="display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:8px;">' +
           '<div>' +
@@ -912,6 +1079,10 @@
         '<div style="display:flex; justify-content:center; gap:5px; margin-bottom:24px;">' + dots + '</div>' +
         '<div style="border-top:1px solid ' + theme.border + '; padding-top:20px; display:flex; flex-direction:column; gap:17px;">' +
           '<div>' +
+            '<div style="font:var(--text-utility-xs); color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:9px;">Render prompt</div>' +
+            '<textarea data-bind="render-prompt" data-id="' + c.id + '" rows="4" style="width:100%; resize:vertical; font-family:inherit; font-size:13px; line-height:1.45; padding:11px 13px; border:1px solid ' + theme.border + '; border-radius:10px; background:' + theme.inputBg + '; color:' + theme.text + ';">' + esc(c.renderPrompt) + '</textarea>' +
+          '</div>' +
+          '<div>' +
             '<div style="font:var(--text-utility-xs); color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:9px;">Caption</div>' +
             '<textarea data-bind="caption" data-id="' + c.id + '" rows="3" style="width:100%; resize:vertical; font-family:inherit; font-size:13.5px; padding:11px 13px; border:1px solid ' + theme.border + '; border-radius:10px; background:' + theme.inputBg + '; color:' + theme.text + ';">' + esc(c.caption) + '</textarea>' +
           '</div>' +
@@ -924,6 +1095,8 @@
   // ---- event binding ----
 
   function bindEvents() {
+    if (eventsBound) return;
+    eventsBound = true;
     root.addEventListener('click', onRootClick);
     root.addEventListener('input', onRootInput);
     root.addEventListener('change', onRootChange);
@@ -963,6 +1136,8 @@
       case 'dec-frames': onDecFrames(idNum); break;
       case 'inc-frames': onIncFrames(idNum); break;
       case 'make-images': onMakeImages(idNum); break;
+      case 'retry-slide': retrySlide(idNum, Number(el.getAttribute('data-slide'))); break;
+      case 'retry-failed': retryFailedSlides(idNum); break;
       case 'open-idea': onOpenIdea(idNum); break;
       case 'toggle-approve': onToggleApprove(idNum); break;
       case 'open-schedule': onOpenSchedule(idNum); break;
@@ -978,6 +1153,12 @@
     if (bind === 'brandUrl') { setSilent({ brandUrl: el.value }); return; }
     if (bind === 'topic') { setSilent({ topic: el.value }); return; }
     if (bind === 'caption') { updateIdeaSilent(Number(el.getAttribute('data-id')), { caption: el.value }); return; }
+    if (bind === 'render-prompt') { updateIdeaSilent(Number(el.getAttribute('data-id')), { renderPrompt: el.value }); return; }
+    if (bind === 'asset-label') {
+      var assetId = Number(el.getAttribute('data-id'));
+      updateBrandSilent(function (b) { return { photos: b.photos.map(function (p) { return p.id === assetId ? Object.assign({}, p, { label: el.value }) : p; }) }; });
+      return;
+    }
   }
 
   function onRootChange(e) {
@@ -988,6 +1169,10 @@
     if (bind === 'schedule-date') { updateIdeaSilent(id, { scheduleDate: el.value }); return; }
     if (bind === 'schedule-time') { updateIdeaSilent(id, { scheduleTime: el.value }); return; }
     if (bind === 'schedule-platform') { updateIdeaSilent(id, { schedulePlatform: el.value }); return; }
+    if (bind === 'asset-role') {
+      updateBrandSilent(function (b) { return { photos: b.photos.map(function (p) { return p.id === id ? Object.assign({}, p, { role: el.value }) : p; }) }; });
+      return;
+    }
   }
 
   function onRootKeyDown(e) {
