@@ -28,6 +28,36 @@ function parseBody(event) {
   }
 }
 
+function parseClaudeJson(content) {
+  if (!content) throw new Error('OpenRouter returned an empty response.');
+
+  let cleaned = String(content).trim();
+
+  // Claude sometimes wraps valid JSON in Markdown fences despite JSON instructions.
+  if (cleaned.startsWith('```')) {
+    cleaned = cleaned
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim();
+  }
+
+  try {
+    return JSON.parse(cleaned);
+  } catch (firstErr) {
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      const possibleJson = cleaned.slice(firstBrace, lastBrace + 1);
+      try {
+        return JSON.parse(possibleJson);
+      } catch (secondErr) {
+        throw new Error(`Claude returned malformed JSON: ${secondErr.message}`);
+      }
+    }
+    throw new Error(`Claude returned malformed JSON: ${firstErr.message}`);
+  }
+}
+
 function routePath(event) {
   const raw = event.path || '';
   const marker = '/.netlify/functions/api';
@@ -64,8 +94,7 @@ async function callClaude(messages) {
 
   const data = await resp.json();
   const content = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
-  if (!content) throw new Error('OpenRouter returned an empty response.');
-  return JSON.parse(content);
+  return parseClaudeJson(content);
 }
 
 async function renderSlideImage(prompt, referenceDataUrl) {
@@ -131,7 +160,7 @@ Available product photos: ${JSON.stringify(photosForPrompt)}
 For each of the ${frameCount} slides, in story order, pick the single best-fitting photo id from the list above. Photos may repeat if needed. Also write a short, punchy 1-4 word uppercase hook line for that slide.
 
 Return ONLY a JSON object of this exact shape, no prose:
-{"slides": [{"n": 1, "photoId": <id from the list, or null if the list is empty>, "hook": "..."}]}`;
+{"slides": [{"n": 1, "photoId": null, "hook": "..."}]}`;
 
   const visionContent = [{ type: 'text', text: pickText }];
   photos.filter((p) => p.dataUrl).forEach((p) => {
