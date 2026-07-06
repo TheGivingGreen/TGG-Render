@@ -97,21 +97,60 @@ async function callClaude(messages) {
   return parseClaudeJson(content);
 }
 
+// fal.subscribe() polls Fal's queue every 500ms with NO default ceiling.
+// It only stops early if `timeout` is passed. Without that, a slow/stuck job
+// can poll silently until Netlify kills the whole function at the platform limit.
+const FAL_SUBSCRIBE_TIMEOUT_MS = 45000;
+
 async function renderSlideImage(prompt, referenceDataUrl) {
   if (!FAL_KEY) {
     throw new Error('FAL_KEY is not set. Add it in Netlify Environment variables and redeploy.');
   }
 
-  const result = referenceDataUrl
-    ? await fal.subscribe('openai/gpt-image-2/edit', {
-        input: { prompt, image_urls: [referenceDataUrl], quality: 'high', output_format: 'png' }
-      })
-    : await fal.subscribe('openai/gpt-image-2', {
-        input: { prompt, image_size: 'portrait_4_3', quality: 'high', num_images: 1, output_format: 'png' }
-      });
+  const endpoint = referenceDataUrl ? 'openai/gpt-image-2/edit' : 'openai/gpt-image-2';
+  const input = referenceDataUrl
+    ? { prompt, image_urls: [referenceDataUrl], quality: 'high', output_format: 'png' }
+    : { prompt, image_size: 'portrait_4_3', quality: 'high', num_images: 1, output_format: 'png' };
+
+  console.log(`[fal] -> ${endpoint} request:`, JSON.stringify({
+    prompt: input.prompt,
+    image_size: input.image_size,
+    quality: input.quality,
+    output_format: input.output_format,
+    num_images: input.num_images,
+    hasReferenceImage: !!referenceDataUrl
+  }));
+
+  const startedAt = Date.now();
+  let result;
+  try {
+    result = await fal.subscribe(endpoint, {
+      input,
+      logs: true,
+      timeout: FAL_SUBSCRIBE_TIMEOUT_MS,
+      onEnqueue: (requestId) => {
+        console.log(`[fal] ${endpoint} enqueued, request_id=${requestId}`);
+      },
+      onQueueUpdate: (update) => {
+        const elapsedMs = Date.now() - startedAt;
+        console.log(`[fal] ${endpoint} status=${update.status} elapsedMs=${elapsedMs}` + (update.queue_position != null ? ` queuePosition=${update.queue_position}` : ''));
+        if (update.logs && update.logs.length) {
+          update.logs.forEach((l) => console.log(`[fal:log] ${endpoint}`, l.message));
+        }
+      }
+    });
+  } catch (err) {
+    console.error(`[fal] ${endpoint} failed after ${Date.now() - startedAt}ms:`, err.message);
+    throw new Error(`Fal request to ${endpoint} failed: ${err.message}`);
+  }
+
+  console.log(`[fal] <- ${endpoint} completed requestId=${result && result.requestId} elapsedMs=${Date.now() - startedAt}`);
 
   const image = result && result.data && result.data.images && result.data.images[0];
-  if (!image || !image.url) throw new Error('Fal did not return an image URL.');
+  if (!image || !image.url) {
+    console.error(`[fal] ${endpoint} completed but returned no image. Raw data:`, JSON.stringify(result && result.data));
+    throw new Error('Fal did not return an image URL.');
+  }
   return image.url;
 }
 
