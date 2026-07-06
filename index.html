@@ -1,0 +1,933 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RENDER Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Archivo+Black&family=Bebas+Neue&family=Inter:wght@400;500;600;700&family=Work+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=Playfair+Display:wght@400;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --font-display: 'Anton', 'Arial Narrow', sans-serif;
+    --font-text: 'Work Sans', 'Helvetica Neue', Arial, sans-serif;
+    --text-heading-md: 600 16px/1.5 var(--font-text);
+    --text-body-strong: 600 16px/1.5 var(--font-text);
+    --text-button-sm: 600 14px/1.4 var(--font-text);
+    --text-caption-sm: 500 12px/1.5 var(--font-text);
+    --text-utility-xs: 500 11px/1.6 var(--font-text);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: 'Work Sans', sans-serif; }
+  textarea, input, select, button { font-family: inherit; }
+  input, textarea, select { outline: none; }
+  input:focus, textarea:focus, select:focus { outline: 2px solid rgba(255,90,95,0.45); outline-offset: 1px; }
+
+  @keyframes rs-pulse { 0%,100% { opacity: 0.5; } 50% { opacity: 1; } }
+  @keyframes rs-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  @keyframes rs-fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+  .rs-imagery-tile .rs-overlay,
+  .rs-photo-tile .rs-overlay { opacity: 0; transition: opacity 0.15s ease; }
+  .rs-imagery-tile:hover .rs-overlay,
+  .rs-photo-tile:hover .rs-overlay { opacity: 1; }
+
+  .rs-mini-frame { transition: transform 0.15s ease; }
+  .rs-mini-frame:hover { transform: translateY(-3px); }
+
+  .rs-pill-btn { transition: opacity 0.15s ease, background-color 0.15s ease; }
+  .rs-pill-btn:hover { opacity: 0.88; }
+
+  .rs-frames-scroll::-webkit-scrollbar { height: 8px; }
+  .rs-frames-scroll::-webkit-scrollbar-thumb { background: rgba(23,63,53,0.2); border-radius: 999px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<input type="file" id="rs-file-input" accept="image/*" style="display:none">
+
+<script>
+(function () {
+  'use strict';
+
+  var ACCENT = '#FF5A5F';
+  var STORAGE_KEY = 'renderStudio.v1';
+
+  var FONT_PAIRS = [
+    { key: 'archivo-inter', name: 'Archivo Black', heading: "'Archivo Black', sans-serif", body: "'Inter', sans-serif" },
+    { key: 'bebas-work', name: 'Bebas Neue', heading: "'Bebas Neue', sans-serif", body: "'Work Sans', sans-serif" },
+    { key: 'space-mono', name: 'Space Grotesk', heading: "'Space Grotesk', sans-serif", body: "'Space Mono', monospace" },
+    { key: 'playfair-source', name: 'Playfair Display', heading: "'Playfair Display', serif", body: "'Source Sans 3', sans-serif" }
+  ];
+
+  var SWATCH_PALETTE = ['#15130F','#F4EFE6','#C1461D','#6B7156','#2B2B2E','#D8CFC0','#8A3B2B','#3E4A3D','#B23A48','#2B6CFF','#1FA97C','#E8B84B'];
+
+  var PHOTO_BGS = ['#2B2B2E', '#C1461D', '#6B7156', '#15130F', '#8A3B2B', '#3E4A3D'];
+
+  var HOOK_LINES = ['NEW DROP', 'MADE TO LAST', 'LIMITED RUN', 'RAW MATERIALS', 'BUILT FOR IT', 'NO SHORTCUTS', 'RESTOCKED', 'ONE OF ONE'];
+
+  var LIGHT_THEME = {
+    bg: '#F5F0E3', text: '#173F35', muted: '#5D7C62', cardBg: '#FFFFFF',
+    border: 'rgba(23,63,53,0.16)', inputBg: '#EAE2CC', chipBg: '#DCE6DD', skeleton: '#EAE2CC',
+    achievementBg: '#F1EACB', achievementBorder: '#B9A35A',
+    shadow: '0 1px 2px rgba(23,63,53,0.06), 0 8px 24px rgba(23,63,53,0.08)',
+    shadowRaised: '0 4px 12px rgba(23,63,53,0.12), 0 16px 40px rgba(23,63,53,0.14)'
+  };
+  var DARK_THEME = {
+    bg: '#0E2921', text: '#FFFFFF', muted: '#B9CBC1', cardBg: '#245446',
+    border: 'rgba(255,255,255,0.18)', inputBg: '#173F35', chipBg: 'rgba(255,255,255,0.08)', skeleton: '#173F35',
+    achievementBg: 'rgba(185,163,90,0.18)', achievementBorder: '#B9A35A',
+    shadow: '0 1px 2px rgba(0,0,0,0.25), 0 8px 24px rgba(0,0,0,0.3)',
+    shadowRaised: '0 4px 16px rgba(0,0,0,0.35), 0 16px 44px rgba(0,0,0,0.4)'
+  };
+
+  function pad(n) { return String(n).padStart(2, '0'); }
+  function defaultDateStr(daysAhead) {
+    var d = new Date();
+    d.setDate(d.getDate() + daysAhead);
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+  function formatDateLabel(dateStr, timeStr) {
+    if (!dateStr) return '';
+    var parts = dateStr.split('-').map(Number);
+    var dt = new Date(parts[0], parts[1] - 1, parts[2]);
+    var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    var label = months[dt.getMonth()] + ' ' + dt.getDate();
+    if (timeStr) label += ' at ' + timeStr;
+    return label;
+  }
+  function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+  function esc(str) {
+    return String(str == null ? '' : str)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  var uid = 100;
+  function nextId() { return uid++; }
+
+  function defaultBrand() {
+    return {
+      name: 'ARCFORM',
+      colors: ['#15130F', '#F4EFE6', '#C1461D', '#6B7156'],
+      fontPairKey: 'archivo-inter',
+      vibeTags: ['Raw', 'Utilitarian', 'Street', 'Minimal'],
+      imagery: [{ id: 1, bg: '#2B2B2E' }],
+      photos: [
+        { id: 1, label: 'Cargo Pant — Front' },
+        { id: 2, label: 'Raw Hoodie — Detail' },
+        { id: 3, label: 'Studio — Lookbook' },
+        { id: 4, label: 'Utility Vest — Flat Lay' }
+      ]
+    };
+  }
+
+  function defaultState() {
+    return {
+      darkMode: false,
+      sidebarCollapsed: false,
+      scheduledPopoverOpen: false,
+      brandUrl: 'https://arcform.com',
+      analyzing: false,
+      analyzed: true,
+      activeSwatchIndex: null,
+      newTagValue: '',
+      brand: defaultBrand(),
+      topic: 'New drop: restocked cargo pants + raw-edge hoodie',
+      ideaCount: 5,
+      ideasLoading: false,
+      ideas: [],
+      openIdeaId: null,
+      generateError: null,
+      configStatus: null
+    };
+  }
+
+  function loadState() {
+    var base = defaultState();
+    try {
+      var raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        var saved = JSON.parse(raw);
+        ['darkMode', 'sidebarCollapsed', 'brandUrl', 'analyzed', 'brand', 'topic', 'ideaCount', 'ideas'].forEach(function (k) {
+          if (saved[k] !== undefined) base[k] = saved[k];
+        });
+      }
+    } catch (e) { /* corrupt storage, fall back to defaults */ }
+
+    var maxId = 100;
+    (base.brand.photos || []).forEach(function (p) { if (p.id > maxId) maxId = p.id; });
+    (base.brand.imagery || []).forEach(function (im) { if (im.id > maxId) maxId = im.id; });
+    (base.ideas || []).forEach(function (i) { if (i.id > maxId) maxId = i.id; });
+    uid = maxId + 1;
+
+    return base;
+  }
+
+  function saveState() {
+    try {
+      var toSave = {
+        darkMode: state.darkMode,
+        sidebarCollapsed: state.sidebarCollapsed,
+        brandUrl: state.brandUrl,
+        analyzed: state.analyzed,
+        brand: state.brand,
+        topic: state.topic,
+        ideaCount: state.ideaCount,
+        ideas: state.ideas
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
+    } catch (e) { /* storage unavailable, continue in-memory only */ }
+  }
+
+  var state = loadState();
+  var root = document.getElementById('app');
+
+  function set(patch) {
+    if (typeof patch === 'function') patch = patch(state);
+    Object.assign(state, patch);
+    saveState();
+    render();
+  }
+  function setSilent(patch) {
+    if (typeof patch === 'function') patch = patch(state);
+    Object.assign(state, patch);
+    saveState();
+  }
+  function updateBrand(patch) {
+    set({ brand: Object.assign({}, state.brand, typeof patch === 'function' ? patch(state.brand) : patch) });
+  }
+  function updateIdea(id, patch) {
+    set({ ideas: state.ideas.map(function (i) { return i.id === id ? Object.assign({}, i, patch) : i; }) });
+  }
+  function updateIdeaSilent(id, patch) {
+    setSilent({ ideas: state.ideas.map(function (i) { return i.id === id ? Object.assign({}, i, patch) : i; }) });
+  }
+  function findIdea(id) { return state.ideas.find(function (i) { return i.id === id; }); }
+
+  // ---- actions ----
+
+  function toggleDarkMode() { set({ darkMode: !state.darkMode }); }
+  function toggleSidebar() { set({ sidebarCollapsed: !state.sidebarCollapsed }); }
+  function toggleScheduledPopover() { set({ scheduledPopoverOpen: !state.scheduledPopoverOpen }); }
+
+  function onAnalyze() {
+    set({ analyzing: true, analyzed: false });
+    setTimeout(function () { set({ analyzing: false, analyzed: true }); }, 900);
+  }
+
+  function onSwatchClick(i) { set({ activeSwatchIndex: state.activeSwatchIndex === i ? null : i }); }
+  function onPickColor(i, hex) {
+    var colors = state.brand.colors.slice();
+    colors[i] = hex;
+    set({ brand: Object.assign({}, state.brand, { colors: colors }), activeSwatchIndex: null });
+  }
+  function onAddSwatch() { updateBrand(function (b) { return { colors: b.colors.concat([pick(SWATCH_PALETTE)]) }; }); }
+
+  function onCycleFont() {
+    updateBrand(function (b) {
+      var idx = FONT_PAIRS.findIndex(function (f) { return f.key === b.fontPairKey; });
+      return { fontPairKey: FONT_PAIRS[(idx + 1) % FONT_PAIRS.length].key };
+    });
+  }
+
+  function onNewTagKeyDown(e) {
+    if (e.key === 'Enter' && state.newTagValue.trim()) {
+      var val = state.newTagValue.trim();
+      updateBrand(function (b) { return { vibeTags: b.vibeTags.concat([val]) }; });
+      set({ newTagValue: '' });
+    }
+  }
+  function onRemoveTag(i) { updateBrand(function (b) { return { vibeTags: b.vibeTags.filter(function (_, idx) { return idx !== i; }) }; }); }
+
+  function onRemovePhoto(id) { updateBrand(function (b) { return { photos: b.photos.filter(function (p) { return p.id !== id; }) }; }); }
+
+  // Real photo upload: Claude needs to actually see product photos to pick one
+  // per carousel slide, and Fal needs a real reference image for best results.
+  var pendingUpload = null;
+  function triggerUpload(kind, id) {
+    pendingUpload = { kind: kind, id: id };
+    document.getElementById('rs-file-input').click();
+  }
+  function humanizeFilename(name) {
+    return name.replace(/\.[^/.]+$/, '').replace(/[-_]+/g, ' ').replace(/\b\w/g, function (ch) { return ch.toUpperCase(); });
+  }
+  function onFileChosen(file) {
+    if (!file || !pendingUpload) return;
+    var target = pendingUpload;
+    pendingUpload = null;
+    var reader = new FileReader();
+    reader.onload = function () {
+      var dataUrl = reader.result;
+      var label = humanizeFilename(file.name);
+      if (target.kind === 'photo') {
+        if (target.id == null) {
+          updateBrand(function (b) { return { photos: b.photos.concat([{ id: nextId(), label: label, dataUrl: dataUrl }]) }; });
+        } else {
+          updateBrand(function (b) { return { photos: b.photos.map(function (p) { return p.id === target.id ? Object.assign({}, p, { label: label, dataUrl: dataUrl }) : p; }) }; });
+        }
+      } else {
+        if (target.id == null) {
+          updateBrand(function (b) { return { imagery: b.imagery.concat([{ id: nextId(), dataUrl: dataUrl }]) }; });
+        } else {
+          updateBrand(function (b) { return { imagery: b.imagery.map(function (im) { return im.id === target.id ? Object.assign({}, im, { dataUrl: dataUrl }) : im; }) }; });
+        }
+      }
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function onIncIdeaCount() { set({ ideaCount: Math.min(10, state.ideaCount + 1) }); }
+  function onDecIdeaCount() { set({ ideaCount: Math.max(3, state.ideaCount - 1) }); }
+
+  function parseJsonResponse(r) {
+    return r.json().catch(function () { return {}; }).then(function (data) { return { ok: r.ok, data: data }; });
+  }
+
+  function generateIdeas() {
+    set({ ideasLoading: true, ideas: [], generateError: null });
+    var count = state.ideaCount;
+    var topic = state.topic || 'the new collection';
+    var brand = state.brand;
+
+    fetch('/api/generate-ideas', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topic: topic, count: count, brand: { name: brand.name, colors: brand.colors, vibeTags: brand.vibeTags } })
+    }).then(parseJsonResponse).then(function (result) {
+      if (!result.ok) throw new Error((result.data && result.data.error) || 'Failed to generate ideas.');
+      var ideas = (result.data.ideas || []).map(function (c) {
+        return {
+          id: nextId(),
+          tag: c.tag,
+          title: c.title,
+          concept: c.concept,
+          caption: c.caption,
+          frameCount: 4 + Math.floor(Math.random() * 3),
+          expanded: true,
+          imagesStatus: 'none',
+          frames: [],
+          renderError: null,
+          approved: false,
+          scheduleOpen: false,
+          scheduled: false,
+          scheduleError: null,
+          scheduleDate: defaultDateStr(3),
+          scheduleTime: '10:00',
+          schedulePlatform: 'Instagram Feed',
+          scheduledLabel: ''
+        };
+      });
+      set({ ideas: ideas, ideasLoading: false });
+    }).catch(function (err) {
+      set({ ideasLoading: false, ideas: [], generateError: err.message });
+    });
+  }
+
+  function onToggleExpand(id) { var idea = findIdea(id); updateIdea(id, { expanded: !idea.expanded }); }
+  function onIncFrames(id) {
+    var idea = findIdea(id);
+    if (idea.imagesStatus === 'ready') return;
+    updateIdea(id, { frameCount: Math.min(8, idea.frameCount + 1) });
+  }
+  function onDecFrames(id) {
+    var idea = findIdea(id);
+    if (idea.imagesStatus === 'ready') return;
+    updateIdea(id, { frameCount: Math.max(3, idea.frameCount - 1) });
+  }
+
+  function onMakeImages(id) {
+    var idea = findIdea(id);
+    if (!idea) return;
+    var brand = state.brand;
+    updateIdea(id, { imagesStatus: 'generating', renderError: null });
+
+    fetch('/api/render-carousel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        idea: { title: idea.title, concept: idea.concept },
+        frameCount: idea.frameCount,
+        brand: {
+          name: brand.name,
+          colors: brand.colors,
+          photos: brand.photos.map(function (p) { return { id: p.id, label: p.label, dataUrl: p.dataUrl || null }; })
+        }
+      })
+    }).then(parseJsonResponse).then(function (result) {
+      if (!result.ok) throw new Error((result.data && result.data.error) || 'Failed to render carousel.');
+      updateIdea(id, { imagesStatus: 'ready', frames: result.data.frames || [] });
+    }).catch(function (err) {
+      updateIdea(id, { imagesStatus: 'none', renderError: err.message });
+    });
+  }
+
+  function onOpenIdea(id) { set({ openIdeaId: id }); }
+  function onCloseModal() { set({ openIdeaId: null }); }
+
+  function onToggleApprove(id) { var idea = findIdea(id); updateIdea(id, { approved: !idea.approved }); }
+  function onOpenSchedule(id) { updateIdea(id, { scheduleOpen: true, scheduleError: null }); }
+  function onConfirmSchedule(id) {
+    var idea = findIdea(id);
+    if (!idea) return;
+    updateIdea(id, { scheduleError: null });
+    var imageUrls = (idea.frames || []).map(function (f) { return f.imageUrl; }).filter(Boolean);
+
+    fetch('/api/schedule', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        caption: idea.caption,
+        imageUrls: imageUrls,
+        scheduleDate: idea.scheduleDate,
+        scheduleTime: idea.scheduleTime,
+        platform: idea.schedulePlatform
+      })
+    }).then(parseJsonResponse).then(function (result) {
+      if (!result.ok) throw new Error((result.data && result.data.error) || 'Failed to schedule post.');
+      updateIdea(id, { scheduled: true, scheduleOpen: false, scheduledLabel: formatDateLabel(idea.scheduleDate, idea.scheduleTime) });
+    }).catch(function (err) {
+      updateIdea(id, { scheduleError: err.message });
+    });
+  }
+
+  // ---- view-model ----
+
+  function makeCard(idea, index, brand, theme) {
+    var frames = idea.frames.length ? idea.frames : Array.from({ length: idea.frameCount }, function (_, i) {
+      return { n: i + 1, bg: PHOTO_BGS[i % PHOTO_BGS.length], photoLabel: '', hook: '' };
+    });
+    var miniFrames = [
+      { top: 0, left: 48, n: 3 },
+      { top: 15, left: 24, n: 2 },
+      { top: 30, left: 0, n: 1 }
+    ];
+    var colorA = brand.colors[index % brand.colors.length];
+    var colorB = brand.colors[(index + 1) % brand.colors.length];
+    return {
+      id: idea.id,
+      n: index + 1,
+      tag: idea.tag,
+      title: idea.title,
+      concept: idea.concept,
+      caption: idea.caption,
+      frameCount: idea.frameCount,
+      expanded: idea.expanded,
+      visualBg: 'linear-gradient(160deg, ' + colorA + ' 0%, ' + colorA + ' 55%, ' + colorB + ' 55%, ' + colorB + ' 100%)',
+      hook: HOOK_LINES[(index + idea.id) % HOOK_LINES.length],
+      miniFrames: miniFrames,
+      imagesStatus: idea.imagesStatus,
+      renderError: idea.renderError,
+      scheduled: idea.scheduled,
+      scheduledLabel: idea.scheduledLabel,
+      schedulePlatform: idea.schedulePlatform,
+      approved: idea.approved,
+      approveColor: idea.approved ? ACCENT : theme.muted,
+      approveToggleLabel: idea.approved ? '✓ Approved' : 'Approve',
+      approveLabel: idea.approved ? 'Approved' : 'Not approved yet',
+      frames: frames,
+      scheduleDate: idea.scheduleDate,
+      scheduleTime: idea.scheduleTime,
+      scheduleError: idea.scheduleError,
+      showScheduleForm: !!idea.scheduleOpen && !idea.scheduled,
+      showScheduleButton: !!idea.approved && !idea.scheduleOpen && !idea.scheduled
+    };
+  }
+
+  // ---- render ----
+
+  function render() {
+    var theme = state.darkMode ? DARK_THEME : LIGHT_THEME;
+    var brand = state.brand;
+    var fontPair = FONT_PAIRS.find(function (f) { return f.key === brand.fontPairKey; }) || FONT_PAIRS[0];
+    var cards = state.ideas.map(function (idea, i) { return makeCard(idea, i, brand, theme); });
+    var scheduled = cards.filter(function (c) { return c.scheduled; });
+    var modalCard = state.openIdeaId ? cards[state.ideas.findIndex(function (i) { return i.id === state.openIdeaId; })] : null;
+
+    root.innerHTML =
+      '<div style="min-height:100vh; background:' + theme.bg + '; color:' + theme.text + '; font-family:\'Work Sans\',sans-serif; display:flex; flex-direction:column; transition:background-color 0.2s ease, color 0.2s ease;">' +
+        renderConfigBanner(state.configStatus) +
+        renderHeader(theme, scheduled) +
+        '<div style="flex:1; display:flex; align-items:flex-start; gap:0; max-width:1560px; width:100%; margin:0 auto;">' +
+          renderSidebar(theme, brand, fontPair) +
+          renderMain(theme, brand, cards) +
+        '</div>' +
+        (modalCard ? renderModal(theme, modalCard) : '') +
+      '</div>';
+
+    bindEvents();
+  }
+
+  function renderConfigBanner(cs) {
+    if (!cs) return '';
+    var missing = [];
+    if (!cs.openrouter) missing.push('OPENROUTER_API_KEY — ideas &amp; captions');
+    if (!cs.fal) missing.push('FAL_KEY — slide rendering');
+    if (!cs.blotato) missing.push('BLOTATO_API_KEY + BLOTATO_INSTAGRAM_ACCOUNT_ID — scheduling');
+    if (!missing.length) return '';
+    return '<div style="background:#3A2A12; color:#F4D9A8; font-size:12.5px; padding:9px 28px; text-align:center; line-height:1.5;">' +
+      'Backend not fully configured — missing ' + missing.join(' · ') + '. Add them to <code>.env</code> and restart the server.' +
+    '</div>';
+  }
+
+  function renderHeader(theme, scheduled) {
+    var popover = '';
+    if (state.scheduledPopoverOpen) {
+      var body;
+      if (scheduled.length) {
+        body = '<div style="display:flex; flex-direction:column; gap:8px;">' +
+          scheduled.map(function (s) {
+            return '<div style="display:flex; flex-direction:column; gap:2px; padding-bottom:8px; border-bottom:1px solid ' + theme.border + ';">' +
+              '<div style="font:var(--text-body-strong); font-size:13.5px;">' + esc(s.title) + '</div>' +
+              '<div style="font-size:12px; color:' + theme.muted + ';">' + esc(s.scheduledLabel) + ' · ' + esc(s.schedulePlatform) + '</div>' +
+            '</div>';
+          }).join('') + '</div>';
+      } else {
+        body = '<div style="font-size:13px; color:' + theme.muted + ';">Nothing scheduled yet.</div>';
+      }
+      popover = '<div style="position:absolute; top:calc(100% + 8px); right:120px; width:280px; background:' + theme.cardBg + '; border:1px solid ' + theme.border + '; box-shadow:' + theme.shadowRaised + '; border-radius:16px; padding:14px; z-index:50;">' +
+        '<div style="font:var(--text-caption-sm); text-transform:uppercase; letter-spacing:0.04em; color:' + theme.muted + '; margin-bottom:10px;">Scheduled posts</div>' +
+        body +
+      '</div>';
+    }
+
+    return '<div style="height:68px; flex-shrink:0; background:' + theme.cardBg + '; border-bottom:1px solid ' + theme.border + '; display:flex; align-items:center; justify-content:space-between; padding:0 28px;">' +
+      '<div style="display:flex; align-items:center; gap:12px;">' +
+        '<div style="width:30px; height:30px; border-radius:8px; background-color:' + theme.text + '; background-image: radial-gradient(' + theme.bg + ' 1.4px, transparent 1.4px); background-size:7px 7px; background-position:2px 2px; flex-shrink:0;"></div>' +
+        '<div style="display:flex; align-items:baseline; gap:6px;">' +
+          '<div style="font-family:\'Anton\', sans-serif; font-size:19px; letter-spacing:0.01em; text-transform:uppercase;">Render</div>' +
+          '<div style="font-family:\'Work Sans\', sans-serif; font-weight:500; font-size:15px; color:' + theme.muted + '; letter-spacing:0.02em; text-transform:uppercase;">Studio</div>' +
+        '</div>' +
+        '<div style="font-size:13px; color:' + theme.muted + '; margin-left:6px; padding-left:14px; border-left:1px solid ' + theme.border + ';">Brand → Instagram carousels</div>' +
+      '</div>' +
+      '<div style="display:flex; align-items:center; gap:10px; position:relative;">' +
+        '<div data-action="toggle-scheduled-popover" style="font:var(--text-button-sm); color:' + theme.text + '; padding:9px 16px; border-radius:999px; border:1px solid ' + theme.border + '; cursor:pointer;">View scheduled (' + scheduled.length + ')</div>' +
+        popover +
+        '<div data-action="toggle-dark" title="Toggle theme" style="width:38px; height:38px; border-radius:999px; border:1px solid ' + theme.border + '; cursor:pointer; display:flex; align-items:center; justify-content:center; overflow:hidden;">' +
+          '<div style="width:20px; height:20px; border-radius:50%; background: linear-gradient(90deg, ' + theme.text + ' 50%, transparent 50%); border:1.5px solid ' + theme.text + ';"></div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function renderSidebar(theme, brand, fontPair) {
+    var width = state.sidebarCollapsed ? 56 : 300;
+    var inner;
+    if (state.sidebarCollapsed) {
+      inner = '<div data-action="toggle-sidebar" style="width:32px; height:32px; border-radius:8px; border:1px solid ' + theme.border + '; display:flex; align-items:center; justify-content:center; cursor:pointer; color:' + theme.muted + ';">›</div>';
+    } else {
+      var swatches = brand.colors.map(function (hex, i) {
+        var pop = '';
+        if (state.activeSwatchIndex === i) {
+          pop = '<div style="position:absolute; top:42px; left:0; z-index:20; background:' + theme.cardBg + '; border:1px solid ' + theme.border + '; box-shadow:' + theme.shadowRaised + '; border-radius:10px; padding:8px; display:grid; grid-template-columns:repeat(4,20px); gap:6px; width:max-content;">' +
+            SWATCH_PALETTE.map(function (hex2) {
+              return '<div data-action="pick-color" data-idx="' + i + '" data-hex="' + hex2 + '" style="width:20px; height:20px; border-radius:5px; background:' + hex2 + '; cursor:pointer; border:1px solid rgba(0,0,0,0.15);"></div>';
+            }).join('') + '</div>';
+        }
+        return '<div style="position:relative;">' +
+          '<div data-action="swatch-click" data-idx="' + i + '" style="width:34px; height:34px; border-radius:9px; background:' + hex + '; border:1px solid ' + theme.border + '; cursor:pointer;"></div>' +
+          pop +
+        '</div>';
+      }).join('');
+
+      var tags = brand.vibeTags.map(function (label, i) {
+        return '<div style="display:flex; align-items:center; gap:5px; background:' + theme.chipBg + '; border-radius:999px; padding:5px 6px 5px 12px; font-size:12px; font-weight:500;">' +
+          esc(label) +
+          '<span data-action="remove-tag" data-idx="' + i + '" style="cursor:pointer; color:' + theme.muted + '; font-size:13px; line-height:1; padding:2px;">×</span>' +
+        '</div>';
+      }).join('');
+
+      var imagery = brand.imagery.map(function (im) {
+        var imBg = im.dataUrl ? ('background-image:url(' + im.dataUrl + '); background-size:cover; background-position:center;') : ('background:' + im.bg + ';');
+        return '<div class="rs-imagery-tile" style="position:relative; aspect-ratio:1; border-radius:10px; overflow:hidden; ' + imBg + ' border:1px solid ' + theme.border + ';">' +
+          '<div class="rs-overlay" style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,0.4);">' +
+            '<div data-action="replace-imagery" data-id="' + im.id + '" style="background:#fff; color:#173F35; font-size:10.5px; font-weight:700; padding:4px 8px; border-radius:6px; cursor:pointer;">Replace</div>' +
+          '</div>' +
+        '</div>';
+      }).join('');
+
+      var photos = brand.photos.map(function (p, i) {
+        var pBg = p.dataUrl ? ('background-image:url(' + p.dataUrl + '); background-size:cover; background-position:center;') : ('background:' + PHOTO_BGS[i % PHOTO_BGS.length] + ';');
+        return '<div class="rs-photo-tile" style="position:relative; aspect-ratio:1; border-radius:10px; overflow:hidden; ' + pBg + ' border:1px solid ' + theme.border + ';">' +
+          '<div style="position:absolute; inset:0; display:flex; align-items:flex-end; padding:6px; font-family:\'Work Sans\',sans-serif; font-size:9px; color:#fff; text-transform:uppercase; letter-spacing:0.03em; text-shadow:0 1px 3px rgba(0,0,0,0.5);">' + esc(p.label) + '</div>' +
+          '<div class="rs-overlay" style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; gap:6px; background:rgba(0,0,0,0.42);">' +
+            '<div data-action="replace-photo" data-id="' + p.id + '" style="background:#fff; color:#173F35; font-size:11px; font-weight:700; padding:5px 8px; border-radius:6px; cursor:pointer;">Replace</div>' +
+            '<div data-action="remove-photo" data-id="' + p.id + '" style="background:rgba(255,255,255,0.92); color:' + ACCENT + '; font-size:11px; font-weight:700; padding:5px 8px; border-radius:6px; cursor:pointer;">Remove</div>' +
+          '</div>' +
+        '</div>';
+      }).join('');
+
+      var analyzedBlock = '';
+      if (state.analyzing) {
+        analyzedBlock = '<div style="font-size:12.5px; color:' + theme.muted + '; display:flex; align-items:center; gap:8px; animation:rs-fadeIn 0.3s ease;">' +
+          '<span style="width:13px; height:13px; border-radius:50%; border:2px solid ' + theme.border + '; border-top-color:' + ACCENT + '; display:inline-block; animation:rs-spin 0.7s linear infinite;"></span>Analyzing brand…' +
+        '</div>';
+      } else if (state.analyzed) {
+        analyzedBlock = '<div style="display:flex; flex-direction:column; gap:22px; animation:rs-fadeIn 0.3s ease;">' +
+          '<div style="display:flex; align-items:center; gap:8px;">' +
+            '<div style="width:8px; height:8px; border-radius:2px; background:' + ACCENT + '; transform:rotate(45deg);"></div>' +
+            '<div style="font:var(--text-body-strong); font-family:\'Anton\', sans-serif; text-transform:uppercase; letter-spacing:0.01em; font-size:15px;">' + esc(brand.name) + '</div>' +
+          '</div>' +
+          '<div>' +
+            '<div style="font:var(--text-utility-xs); color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:8px;">Font</div>' +
+            '<div data-action="cycle-font" style="border:1px solid ' + theme.border + '; border-radius:10px; padding:10px 12px; cursor:pointer; background:' + theme.inputBg + ';">' +
+              '<div style="font-family:' + fontPair.heading + '; font-size:16px;">' + esc(fontPair.name) + '</div>' +
+              '<div style="font-size:10.5px; color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.05em; margin-top:2px;">Display</div>' +
+            '</div>' +
+          '</div>' +
+          '<div>' +
+            '<div style="font:var(--text-utility-xs); color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:8px;">Palette</div>' +
+            '<div style="display:flex; gap:8px; flex-wrap:wrap; position:relative;">' +
+              swatches +
+              '<div data-action="add-swatch" style="width:34px; height:34px; border-radius:9px; border:1px dashed ' + theme.border + '; display:flex; align-items:center; justify-content:center; cursor:pointer; color:' + theme.muted + '; font-size:16px;">＋</div>' +
+            '</div>' +
+          '</div>' +
+          '<div>' +
+            '<div style="font:var(--text-utility-xs); color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:8px;">Voice</div>' +
+            '<div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">' +
+              tags +
+              '<input data-bind="newTag" value="' + esc(state.newTagValue) + '" placeholder="+ add" style="width:60px; font-size:12px; border:1px dashed ' + theme.border + '; border-radius:999px; padding:5px 10px; font-family:inherit; background:transparent; color:' + theme.text + ';" />' +
+            '</div>' +
+          '</div>' +
+          '<div>' +
+            '<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">' +
+              '<div style="font:var(--text-utility-xs); color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.06em;">Imagery</div>' +
+            '</div>' +
+            '<div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">' +
+              imagery +
+              '<div data-action="add-imagery" style="aspect-ratio:1; border-radius:10px; border:1px dashed ' + theme.border + '; display:flex; align-items:center; justify-content:center; cursor:pointer; color:' + theme.muted + '; font-size:20px; font-weight:300;">＋</div>' +
+            '</div>' +
+          '</div>' +
+          '<div>' +
+            '<div style="font:var(--text-utility-xs); color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:8px;">Products</div>' +
+            '<div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">' +
+              photos +
+              '<div data-action="add-photo" style="aspect-ratio:1; border-radius:10px; border:1px dashed ' + theme.border + '; display:flex; align-items:center; justify-content:center; cursor:pointer; color:' + theme.muted + '; font-size:20px; font-weight:300;">＋</div>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+      }
+
+      inner = '<div style="display:flex; flex-direction:column; gap:22px; width:260px;">' +
+        '<div style="display:flex; align-items:center; justify-content:space-between;">' +
+          '<div style="font:var(--text-heading-md);">Brand System</div>' +
+          '<div data-action="toggle-sidebar" style="width:26px; height:26px; border-radius:7px; border:1px solid ' + theme.border + '; display:flex; align-items:center; justify-content:center; cursor:pointer; color:' + theme.muted + '; font-size:13px;">‹</div>' +
+        '</div>' +
+        '<div>' +
+          '<div style="font:var(--text-utility-xs); color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:8px;">Brand website</div>' +
+          '<div style="display:flex; gap:6px;">' +
+            '<input data-bind="brandUrl" value="' + esc(state.brandUrl) + '" placeholder="paste a brand URL" style="flex:1; min-width:0; font-size:13px; padding:9px 11px; border:1px solid ' + theme.border + '; border-radius:10px; font-family:inherit; color:' + theme.text + '; background:' + theme.inputBg + ';" />' +
+            '<div data-action="analyze" style="width:36px; height:36px; flex-shrink:0; border-radius:10px; background:' + ACCENT + '; color:#fff; display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:15px;">→</div>' +
+          '</div>' +
+          '<div style="font-size:11.5px; color:' + theme.muted + '; margin-top:8px; line-height:1.5;">Paste a URL and hit enter. Reads the site’s fonts, colors, voice, and images.</div>' +
+        '</div>' +
+        analyzedBlock +
+      '</div>';
+    }
+
+    return '<div style="width:' + width + 'px; flex-shrink:0; padding:24px 20px; border-right:1px solid ' + theme.border + '; align-self:stretch; overflow:hidden; transition:width 0.18s ease;">' + inner + '</div>';
+  }
+
+  function renderMain(theme, brand, cards) {
+    var directionBar = '<div style="background:' + theme.cardBg + '; border:1px solid ' + theme.border + '; box-shadow:' + theme.shadow + '; border-radius:16px; padding:22px; display:flex; gap:18px; align-items:flex-end; flex-wrap:wrap;">' +
+      '<div style="flex:2; min-width:260px;">' +
+        '<div style="font:var(--text-utility-xs); color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:9px;">Your creative direction</div>' +
+        '<textarea data-bind="topic" placeholder="e.g. New drop: restocked cargo pants + raw-edge hoodie" rows="2" style="width:100%; resize:vertical; font-family:inherit; font-size:14px; padding:11px 13px; border:1px solid ' + theme.border + '; border-radius:12px; background:' + theme.inputBg + '; color:' + theme.text + ';">' + esc(state.topic) + '</textarea>' +
+      '</div>' +
+      '<div>' +
+        '<div style="font:var(--text-utility-xs); color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:9px;"># of ideas</div>' +
+        '<div style="display:flex; align-items:center; border:1px solid ' + theme.border + '; border-radius:10px; overflow:hidden; height:44px;">' +
+          '<div data-action="dec-idea-count" style="width:32px; height:100%; display:flex; align-items:center; justify-content:center; cursor:pointer; color:' + theme.text + '; font-size:16px; user-select:none;">−</div>' +
+          '<div style="width:34px; text-align:center; font-size:14px; font-weight:700;">' + state.ideaCount + '</div>' +
+          '<div data-action="inc-idea-count" style="width:32px; height:100%; display:flex; align-items:center; justify-content:center; cursor:pointer; color:' + theme.text + '; font-size:16px; user-select:none;">＋</div>' +
+        '</div>' +
+      '</div>' +
+      '<div data-action="generate" style="height:44px; padding:0 24px; border-radius:999px; background:' + ACCENT + '; color:#fff; font-weight:700; font-size:14px; cursor:pointer; display:flex; align-items:center; justify-content:center;">' +
+        (state.ideasLoading ? 'Generating…' : 'Generate ideas') +
+      '</div>' +
+    '</div>';
+
+    var body;
+    if (state.ideasLoading) {
+      var rows = Array.from({ length: Math.min(state.ideaCount, 5) }, function () {
+        return '<div style="background:' + theme.cardBg + '; border:1px solid ' + theme.border + '; border-radius:16px; padding:20px; display:flex; gap:16px; align-items:center;">' +
+          '<div style="width:96px; height:64px; border-radius:10px; background:' + theme.skeleton + '; animation:rs-pulse 1.3s ease-in-out infinite;"></div>' +
+          '<div style="flex:1; display:flex; flex-direction:column; gap:8px;">' +
+            '<div style="width:40%; height:12px; border-radius:4px; background:' + theme.skeleton + '; animation:rs-pulse 1.3s ease-in-out infinite;"></div>' +
+            '<div style="width:80%; height:12px; border-radius:4px; background:' + theme.skeleton + '; animation:rs-pulse 1.3s ease-in-out infinite;"></div>' +
+          '</div>' +
+        '</div>';
+      }).join('');
+      body = '<div style="display:flex; flex-direction:column; gap:14px;">' + rows + '</div>';
+    } else if (cards.length) {
+      body = '<div style="display:flex; flex-direction:column; gap:16px;">' + cards.map(function (c) { return renderIdeaCard(theme, c); }).join('') + '</div>';
+    } else if (state.generateError) {
+      body = '<div style="text-align:center; padding:60px 20px; color:#C0392B; font-size:14px; line-height:1.5;">Couldn’t generate ideas: ' + esc(state.generateError) + '</div>';
+    } else {
+      body = '<div style="text-align:center; padding:60px 20px; color:' + theme.muted + '; font-size:14px;">Describe what your posts should be about, then hit Generate.</div>';
+    }
+
+    return '<div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:20px; padding:24px 28px;">' + directionBar + body + '</div>';
+  }
+
+  function renderIdeaCard(theme, c) {
+    var caret = c.expanded ? 'rotate(0deg)' : 'rotate(-90deg)';
+    var scheduledTag = c.scheduled ? '<span style="font:var(--text-caption-sm); color:' + theme.text + '; background:' + theme.achievementBg + '; border:1px solid ' + theme.achievementBorder + '; border-radius:999px; padding:4px 12px; letter-spacing:0.02em; text-transform:uppercase;">Scheduled</span>' : '';
+    var approvedTag = c.approved ? '<span style="font:var(--text-caption-sm); color:' + ACCENT + ';">Approved</span>' : '';
+
+    var expandedBody = '';
+    if (c.expanded) {
+      var miniFrames = c.miniFrames.map(function (mf) {
+        return '<div class="rs-mini-frame" style="position:absolute; top:' + mf.top + 'px; left:' + mf.left + 'px; width:111px; height:150px; border-radius:10px; background-image: repeating-linear-gradient(45deg, ' + theme.border + ' 0, ' + theme.border + ' 1px, transparent 1px, transparent 9px); background-color:' + theme.inputBg + '; border:1px dashed ' + theme.border + ';">' +
+          '<div style="position:absolute; bottom:8px; right:8px; width:22px; height:22px; border-radius:5px; background:' + ACCENT + '; color:#fff; font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center;">' + mf.n + '</div>' +
+        '</div>';
+      }).join('');
+
+      var frameControlDisabled = c.imagesStatus === 'ready';
+      var actionBlock;
+      if (c.imagesStatus === 'ready') {
+        actionBlock = '<div data-action="open-idea" data-id="' + c.id + '" style="text-align:center; padding:11px 10px; border-radius:999px; border:1px solid ' + theme.text + '; font-size:13px; font-weight:700; cursor:pointer; color:' + theme.text + ';">View carousel</div>';
+      } else if (c.imagesStatus === 'generating') {
+        actionBlock = '<div style="text-align:center; padding:11px 10px; border-radius:999px; background:' + theme.chipBg + '; font-size:13px; font-weight:700; color:' + theme.muted + '; display:flex; align-items:center; justify-content:center; gap:8px;">' +
+          '<span style="width:13px; height:13px; border-radius:50%; border:2px solid ' + theme.border + '; border-top-color:' + ACCENT + '; display:inline-block; animation:rs-spin 0.7s linear infinite;"></span>Rendering' +
+        '</div>';
+      } else {
+        actionBlock = '<div data-action="make-images" data-id="' + c.id + '" style="text-align:center; padding:11px 10px; border-radius:999px; background:' + ACCENT + '; color:#fff; font-size:13px; font-weight:700; cursor:pointer;">Render carousel</div>';
+      }
+
+      expandedBody = '<div style="padding:0 20px 20px; display:flex; flex-direction:column; gap:16px;">' +
+        '<div style="display:grid; grid-template-columns:1fr 1.15fr 1fr; gap:20px; align-items:start;">' +
+          '<div>' +
+            '<div style="font:var(--text-utility-xs); color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:9px;">Visual idea</div>' +
+            '<div style="aspect-ratio:4/5; border-radius:12px; overflow:hidden; position:relative; background:' + c.visualBg + '; border:1px solid ' + theme.border + ';">' +
+              '<div style="position:absolute; inset:0; background-image: radial-gradient(rgba(255,255,255,0.35) 1.2px, transparent 1.2px); background-size:10px 10px;"></div>' +
+              '<div style="position:absolute; top:14px; left:14px; font-family:\'Anton\', sans-serif; color:#fff; font-size:22px; text-transform:uppercase; line-height:1;">' + esc(c.hook) + '</div>' +
+              '<div style="position:absolute; bottom:12px; left:14px; font-size:10px; letter-spacing:0.08em; text-transform:uppercase; color:rgba(255,255,255,0.85);">' + esc(state.brand.name) + '</div>' +
+            '</div>' +
+          '</div>' +
+          '<div>' +
+            '<div style="font:var(--text-utility-xs); color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:9px;">Suggested caption</div>' +
+            '<textarea data-bind="caption" data-id="' + c.id + '" rows="5" style="width:100%; resize:none; font-family:inherit; font-size:13px; padding:11px 13px; border:1px solid ' + theme.border + '; border-radius:10px; background:' + theme.inputBg + '; color:' + theme.text + '; margin-bottom:12px;">' + esc(c.caption) + '</textarea>' +
+            '<div style="font:var(--text-utility-xs); color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px;">Written idea</div>' +
+            '<div style="font-size:12.5px; color:' + theme.muted + '; line-height:1.5;">' + esc(c.concept) + '</div>' +
+          '</div>' +
+          '<div>' +
+            '<div style="font:var(--text-utility-xs); color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:9px;">Photos</div>' +
+            '<div data-action="open-idea" data-id="' + c.id + '" title="Click to view full carousel" style="position:relative; height:180px; margin-bottom:14px; cursor:pointer;">' + miniFrames + '</div>' +
+            '<div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">' +
+              '<div style="font-size:11px; color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.05em;">Slides</div>' +
+              '<div style="display:flex; align-items:center; border:1px solid ' + theme.border + '; border-radius:8px; overflow:hidden; opacity:' + (frameControlDisabled ? '0.4' : '1') + ';">' +
+                '<div data-action="dec-frames" data-id="' + c.id + '" style="width:24px; height:24px; display:flex; align-items:center; justify-content:center; cursor:' + (frameControlDisabled ? 'default' : 'pointer') + '; font-size:13px; color:' + theme.text + ';">−</div>' +
+                '<div style="width:22px; text-align:center; font-size:12px; font-weight:700;">' + c.frameCount + '</div>' +
+                '<div data-action="inc-frames" data-id="' + c.id + '" style="width:24px; height:24px; display:flex; align-items:center; justify-content:center; cursor:' + (frameControlDisabled ? 'default' : 'pointer') + '; font-size:13px; color:' + theme.text + ';">＋</div>' +
+              '</div>' +
+            '</div>' +
+            actionBlock +
+            (c.renderError ? '<div style="font-size:11.5px; color:#C0392B; margin-top:8px; line-height:1.4;">' + esc(c.renderError) + '</div>' : '') +
+          '</div>' +
+        '</div>' +
+        '<div style="display:flex; align-items:center; gap:10px; border-top:1px solid ' + theme.border + '; padding-top:14px; flex-wrap:wrap;">' +
+          '<div data-action="toggle-approve" data-id="' + c.id + '" style="font-size:12.5px; font-weight:700; color:' + c.approveColor + '; cursor:pointer; padding:8px 16px; border-radius:999px; border:1px solid ' + c.approveColor + ';">' + c.approveToggleLabel + '</div>' +
+          '<div style="flex:1;"></div>' +
+          (c.scheduleError ? '<div style="font-size:11.5px; color:#C0392B;">' + esc(c.scheduleError) + '</div>' : '') +
+          (c.scheduled ? '<div style="font-size:12.5px; color:' + theme.muted + ';">Scheduled · ' + esc(c.scheduledLabel) + '</div>' : '') +
+          (c.showScheduleButton ? '<div data-action="open-schedule" data-id="' + c.id + '" style="font-size:12.5px; font-weight:700; color:#fff; background:' + ACCENT + '; padding:9px 18px; border-radius:999px; cursor:pointer;">Schedule</div>' : '') +
+        '</div>' +
+      '</div>';
+    }
+
+    return '<div style="background:' + theme.cardBg + '; border:1px solid ' + theme.border + '; box-shadow:' + theme.shadow + '; border-radius:16px; overflow:hidden; animation:rs-fadeIn 0.25s ease;">' +
+      '<div data-action="toggle-expand" data-id="' + c.id + '" style="display:flex; align-items:center; gap:12px; padding:16px 20px; cursor:pointer;">' +
+        '<div style="color:' + theme.muted + '; font-size:12px; width:14px; text-align:center; transform:' + caret + '; transition:transform 0.15s ease;">▾</div>' +
+        '<div style="width:26px; height:26px; border-radius:6px; background:' + theme.text + '; color:' + theme.bg + '; display:flex; align-items:center; justify-content:center; font-family:\'Anton\',sans-serif; font-size:13px; flex-shrink:0;">' + c.n + '</div>' +
+        '<div style="font:var(--text-body-strong); font-size:16px; flex:1;">' + esc(c.title) + '</div>' +
+        scheduledTag + approvedTag +
+      '</div>' +
+      expandedBody +
+    '</div>';
+  }
+
+  function renderModal(theme, c) {
+    var frames = c.frames.map(function (fr) {
+      var bgStyle = fr.imageUrl ? ('background-image:url(' + fr.imageUrl + '); background-size:cover; background-position:center;') : ('background:' + fr.bg + ';');
+      return '<div style="width:200px; flex-shrink:0; aspect-ratio:4/5; border-radius:12px; position:relative; overflow:hidden; ' + bgStyle + ' border:1px solid ' + theme.border + ';">' +
+        '<div style="position:absolute; top:10px; left:10px; background:rgba(255,255,255,0.9); color:#173F35; font-size:11px; font-weight:700; padding:2px 8px; border-radius:999px;">' + fr.n + '</div>' +
+        '<div style="position:absolute; inset:0; display:flex; flex-direction:column; justify-content:flex-end; padding:12px;">' +
+          '<div style="font-family:\'Anton\', sans-serif; color:#fff; font-size:16px; line-height:1.15; text-shadow:0 2px 6px rgba(0,0,0,0.4); margin-bottom:6px; text-transform:uppercase;">' + esc(fr.hook) + '</div>' +
+          '<div style="font-size:8.5px; letter-spacing:0.06em; color:rgba(255,255,255,0.8); text-transform:uppercase;">' + esc(fr.photoLabel) + '</div>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+
+    var dots = c.frames.map(function () {
+      return '<div style="width:5px; height:5px; border-radius:50%; background:' + theme.border + ';"></div>';
+    }).join('');
+
+    var actionSection = '';
+    if (c.imagesStatus === 'none') {
+      actionSection += '<div data-action="make-images" data-id="' + c.id + '" style="align-self:flex-start; padding:12px 22px; border-radius:999px; background:' + ACCENT + '; color:#fff; font-weight:700; font-size:13.5px; cursor:pointer;">Render carousel</div>';
+      if (c.renderError) actionSection += '<div style="font-size:12px; color:#C0392B; line-height:1.4;">' + esc(c.renderError) + '</div>';
+    }
+    if (c.imagesStatus === 'generating') {
+      actionSection += '<div style="display:flex; align-items:center; gap:8px; padding:12px 22px; border-radius:999px; background:' + theme.chipBg + '; color:' + theme.muted + '; font-weight:700; font-size:13.5px; align-self:flex-start;">' +
+        '<span style="width:13px; height:13px; border-radius:50%; border:2px solid ' + theme.border + '; border-top-color:' + ACCENT + '; display:inline-block; animation:rs-spin 0.7s linear infinite;"></span>Rendering…' +
+      '</div>';
+    }
+    if (c.imagesStatus === 'ready') {
+      actionSection += '<div style="display:flex; align-items:center; justify-content:space-between; background:' + theme.inputBg + '; border:1px solid ' + theme.border + '; border-radius:12px; padding:15px 17px;">' +
+        '<div style="font-size:13.5px; font-weight:700; color:' + c.approveColor + ';">' + c.approveLabel + '</div>' +
+        '<div data-action="toggle-approve" data-id="' + c.id + '" style="font-size:12.5px; font-weight:700; color:' + ACCENT + '; cursor:pointer;">' + c.approveToggleLabel + '</div>' +
+      '</div>';
+    }
+    if (c.scheduled) {
+      actionSection += '<div style="display:flex; align-items:center; gap:10px; background:' + theme.achievementBg + '; border:1px solid ' + theme.achievementBorder + '; border-radius:12px; padding:15px 17px;">' +
+        '<div>' +
+          '<div style="font-size:13.5px; font-weight:800; color:' + theme.text + ';">Scheduled for ' + esc(c.scheduledLabel) + '</div>' +
+          '<div style="font-size:12px; color:' + theme.muted + ';">' + esc(c.schedulePlatform) + '</div>' +
+        '</div>' +
+      '</div>';
+    }
+    if (c.showScheduleForm) {
+      actionSection += '<div style="background:' + theme.inputBg + '; border:1px solid ' + theme.border + '; border-radius:12px; padding:17px; display:flex; flex-direction:column; gap:13px;">' +
+        '<div style="display:flex; gap:12px;">' +
+          '<div style="flex:1;">' +
+            '<div style="font-size:11px; color:' + theme.muted + '; margin-bottom:5px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em;">Date</div>' +
+            '<input type="date" data-bind="schedule-date" data-id="' + c.id + '" value="' + esc(c.scheduleDate) + '" style="width:100%; padding:8px 10px; border:1px solid ' + theme.border + '; border-radius:8px; font-family:inherit; font-size:13px; background:' + theme.cardBg + '; color:' + theme.text + ';" />' +
+          '</div>' +
+          '<div style="flex:1;">' +
+            '<div style="font-size:11px; color:' + theme.muted + '; margin-bottom:5px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em;">Time</div>' +
+            '<input type="time" data-bind="schedule-time" data-id="' + c.id + '" value="' + esc(c.scheduleTime) + '" style="width:100%; padding:8px 10px; border:1px solid ' + theme.border + '; border-radius:8px; font-family:inherit; font-size:13px; background:' + theme.cardBg + '; color:' + theme.text + ';" />' +
+          '</div>' +
+          '<div style="flex:1;">' +
+            '<div style="font-size:11px; color:' + theme.muted + '; margin-bottom:5px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em;">Platform</div>' +
+            '<select data-bind="schedule-platform" data-id="' + c.id + '" style="width:100%; padding:8px 10px; border:1px solid ' + theme.border + '; border-radius:8px; font-family:inherit; font-size:13px; background:' + theme.cardBg + '; color:' + theme.text + ';">' +
+              '<option value="Instagram Feed"' + (c.schedulePlatform === 'Instagram Feed' ? ' selected' : '') + '>Instagram Feed</option>' +
+              '<option value="Instagram Stories"' + (c.schedulePlatform === 'Instagram Stories' ? ' selected' : '') + '>Instagram Stories</option>' +
+            '</select>' +
+          '</div>' +
+        '</div>' +
+        '<div data-action="confirm-schedule" data-id="' + c.id + '" style="align-self:flex-start; padding:11px 20px; border-radius:999px; background:' + ACCENT + '; color:#fff; font-weight:700; font-size:13px; cursor:pointer;">Confirm schedule</div>' +
+        (c.scheduleError ? '<div style="font-size:12px; color:#C0392B; line-height:1.4;">' + esc(c.scheduleError) + '</div>' : '') +
+      '</div>';
+    }
+    if (c.showScheduleButton) {
+      actionSection += '<div data-action="open-schedule" data-id="' + c.id + '" style="align-self:flex-start; padding:12px 24px; border-radius:999px; background:' + ACCENT + '; color:#fff; font-weight:700; font-size:13.5px; cursor:pointer;">Schedule</div>';
+    }
+
+    return '<div data-action="close-modal" style="position:fixed; inset:0; background:rgba(14,41,33,0.55); z-index:100; display:flex; align-items:center; justify-content:center; padding:32px; animation:rs-fadeIn 0.2s ease;">' +
+      '<div style="background:' + theme.cardBg + '; border:1px solid ' + theme.border + '; box-shadow:' + theme.shadowRaised + '; border-radius:20px; width:min(960px, 100%); max-height:88vh; overflow-y:auto; padding:30px 34px;">' +
+        '<div style="display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:8px;">' +
+          '<div>' +
+            '<div style="font-size:11px; font-weight:700; color:' + ACCENT + '; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:5px;">' + esc(c.tag) + '</div>' +
+            '<div style="font-size:24px; font-family:\'Anton\',sans-serif; text-transform:uppercase; letter-spacing:0.01em;">' + esc(c.title) + '</div>' +
+          '</div>' +
+          '<div data-action="close-modal" style="cursor:pointer; color:' + theme.muted + '; font-size:24px; line-height:1; padding:4px;">×</div>' +
+        '</div>' +
+        '<div style="font-size:13.5px; color:' + theme.muted + '; margin-bottom:22px;">' + esc(c.concept) + '</div>' +
+        '<div class="rs-frames-scroll" style="display:flex; gap:14px; overflow-x:auto; padding:6px 2px 16px; margin-bottom:6px;">' + frames + '</div>' +
+        '<div style="display:flex; justify-content:center; gap:5px; margin-bottom:24px;">' + dots + '</div>' +
+        '<div style="border-top:1px solid ' + theme.border + '; padding-top:20px; display:flex; flex-direction:column; gap:17px;">' +
+          '<div>' +
+            '<div style="font:var(--text-utility-xs); color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:9px;">Caption</div>' +
+            '<textarea data-bind="caption" data-id="' + c.id + '" rows="3" style="width:100%; resize:vertical; font-family:inherit; font-size:13.5px; padding:11px 13px; border:1px solid ' + theme.border + '; border-radius:10px; background:' + theme.inputBg + '; color:' + theme.text + ';">' + esc(c.caption) + '</textarea>' +
+          '</div>' +
+          actionSection +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }
+
+  // ---- event binding ----
+
+  function bindEvents() {
+    root.addEventListener('click', onRootClick);
+    root.addEventListener('input', onRootInput);
+    root.addEventListener('change', onRootChange);
+    root.addEventListener('keydown', onRootKeyDown);
+  }
+
+  function onRootClick(e) {
+    var modalBackdrop = e.target.closest('[data-action="close-modal"]');
+    if (modalBackdrop && e.target === modalBackdrop) { onCloseModal(); return; }
+
+    var el = e.target.closest('[data-action]');
+    if (!el) return;
+    var action = el.getAttribute('data-action');
+    if (action === 'close-modal') return; // handled above only on direct backdrop hit
+    var id = el.getAttribute('data-id');
+    var idNum = id !== null ? Number(id) : null;
+
+    switch (action) {
+      case 'toggle-dark': toggleDarkMode(); break;
+      case 'toggle-sidebar': toggleSidebar(); break;
+      case 'toggle-scheduled-popover': toggleScheduledPopover(); break;
+      case 'analyze': onAnalyze(); break;
+      case 'cycle-font': onCycleFont(); break;
+      case 'add-swatch': onAddSwatch(); break;
+      case 'swatch-click': onSwatchClick(Number(el.getAttribute('data-idx'))); break;
+      case 'pick-color': onPickColor(Number(el.getAttribute('data-idx')), el.getAttribute('data-hex')); break;
+      case 'remove-tag': onRemoveTag(Number(el.getAttribute('data-idx'))); break;
+      case 'add-imagery': triggerUpload('imagery', null); break;
+      case 'replace-imagery': triggerUpload('imagery', idNum); break;
+      case 'add-photo': triggerUpload('photo', null); break;
+      case 'replace-photo': triggerUpload('photo', idNum); break;
+      case 'remove-photo': onRemovePhoto(idNum); break;
+      case 'dec-idea-count': onDecIdeaCount(); break;
+      case 'inc-idea-count': onIncIdeaCount(); break;
+      case 'generate': generateIdeas(); break;
+      case 'toggle-expand': onToggleExpand(idNum); break;
+      case 'dec-frames': onDecFrames(idNum); break;
+      case 'inc-frames': onIncFrames(idNum); break;
+      case 'make-images': onMakeImages(idNum); break;
+      case 'open-idea': onOpenIdea(idNum); break;
+      case 'toggle-approve': onToggleApprove(idNum); break;
+      case 'open-schedule': onOpenSchedule(idNum); break;
+      case 'confirm-schedule': onConfirmSchedule(idNum); break;
+    }
+  }
+
+  function onRootInput(e) {
+    var el = e.target;
+    var bind = el.getAttribute && el.getAttribute('data-bind');
+    if (!bind) return;
+    if (bind === 'newTag') { setSilent({ newTagValue: el.value }); return; }
+    if (bind === 'brandUrl') { setSilent({ brandUrl: el.value }); return; }
+    if (bind === 'topic') { setSilent({ topic: el.value }); return; }
+    if (bind === 'caption') { updateIdeaSilent(Number(el.getAttribute('data-id')), { caption: el.value }); return; }
+  }
+
+  function onRootChange(e) {
+    var el = e.target;
+    var bind = el.getAttribute && el.getAttribute('data-bind');
+    if (!bind) return;
+    var id = Number(el.getAttribute('data-id'));
+    if (bind === 'schedule-date') { updateIdeaSilent(id, { scheduleDate: el.value }); return; }
+    if (bind === 'schedule-time') { updateIdeaSilent(id, { scheduleTime: el.value }); return; }
+    if (bind === 'schedule-platform') { updateIdeaSilent(id, { schedulePlatform: el.value }); return; }
+  }
+
+  function onRootKeyDown(e) {
+    var el = e.target;
+    var bind = el.getAttribute && el.getAttribute('data-bind');
+    if (bind === 'newTag') onNewTagKeyDown(e);
+  }
+
+  document.getElementById('rs-file-input').addEventListener('change', function (e) {
+    var file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    onFileChosen(file);
+  });
+
+  fetch('/api/config-status').then(function (r) { return r.json(); }).then(function (data) {
+    set({ configStatus: data });
+  }).catch(function () { /* backend unreachable; leave banner unset, actions will surface their own errors */ });
+
+  if (!state.ideas.length && !state.ideasLoading) {
+    generateIdeas();
+  } else {
+    render();
+  }
+})();
+</script>
+</body>
+</html>
