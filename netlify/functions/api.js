@@ -33,7 +33,6 @@ function parseClaudeJson(content) {
 
   let cleaned = String(content).trim();
 
-  // Claude sometimes wraps valid JSON in Markdown fences despite JSON instructions.
   if (cleaned.startsWith('```')) {
     cleaned = cleaned
       .replace(/^```(?:json)?\s*/i, '')
@@ -97,12 +96,7 @@ async function callClaude(messages) {
   return parseClaudeJson(content);
 }
 
-// fal.subscribe() polls Fal's queue every 500ms with NO default ceiling.
-// It only stops early if `timeout` is passed. Without that, a slow/stuck job
-// can poll silently until Netlify kills the whole function at the platform limit.
-const FAL_SUBSCRIBE_TIMEOUT_MS = 45000;
-
-async function renderSlideImage(prompt, referenceDataUrl) {
+async function submitSlideJob(prompt, referenceDataUrl) {
   if (!FAL_KEY) {
     throw new Error('FAL_KEY is not set. Add it in Netlify Environment variables and redeploy.');
   }
@@ -112,7 +106,7 @@ async function renderSlideImage(prompt, referenceDataUrl) {
     ? { prompt, image_urls: [referenceDataUrl], quality: 'high', output_format: 'png' }
     : { prompt, image_size: 'portrait_4_3', quality: 'high', num_images: 1, output_format: 'png' };
 
-  console.log(`[fal] -> ${endpoint} request:`, JSON.stringify({
+  console.log(`[fal submit] -> ${endpoint}`, JSON.stringify({
     prompt: input.prompt,
     image_size: input.image_size,
     quality: input.quality,
@@ -121,37 +115,27 @@ async function renderSlideImage(prompt, referenceDataUrl) {
     hasReferenceImage: !!referenceDataUrl
   }));
 
-  const startedAt = Date.now();
-  let result;
-  try {
-    result = await fal.subscribe(endpoint, {
-      input,
-      logs: true,
-      timeout: FAL_SUBSCRIBE_TIMEOUT_MS,
-      onEnqueue: (requestId) => {
-        console.log(`[fal] ${endpoint} enqueued, request_id=${requestId}`);
-      },
-      onQueueUpdate: (update) => {
-        const elapsedMs = Date.now() - startedAt;
-        console.log(`[fal] ${endpoint} status=${update.status} elapsedMs=${elapsedMs}` + (update.queue_position != null ? ` queuePosition=${update.queue_position}` : ''));
-        if (update.logs && update.logs.length) {
-          update.logs.forEach((l) => console.log(`[fal:log] ${endpoint}`, l.message));
-        }
-      }
-    });
-  } catch (err) {
-    console.error(`[fal] ${endpoint} failed after ${Date.now() - startedAt}ms:`, err.message);
-    throw new Error(`Fal request to ${endpoint} failed: ${err.message}`);
+  const queued = await fal.queue.submit(endpoint, { input });
+  console.log(`[fal submit] <- ${endpoint} request_id=${queued.request_id}`);
+  return { endpoint, requestId: queued.request_id };
+}
+
+async function checkSlideJob(endpoint, requestId) {
+  const status = await fal.queue.status(endpoint, { requestId, logs: false });
+  console.log(`[fal status] ${endpoint} request_id=${requestId} status=${status.status}` +
+    (status.queue_position != null ? ` queuePosition=${status.queue_position}` : ''));
+
+  if (status.status !== 'COMPLETED') {
+    return { status: 'pending' };
   }
 
-  console.log(`[fal] <- ${endpoint} completed requestId=${result && result.requestId} elapsedMs=${Date.now() - startedAt}`);
-
+  const result = await fal.queue.result(endpoint, { requestId });
   const image = result && result.data && result.data.images && result.data.images[0];
   if (!image || !image.url) {
-    console.error(`[fal] ${endpoint} completed but returned no image. Raw data:`, JSON.stringify(result && result.data));
-    throw new Error('Fal did not return an image URL.');
+    console.error(`[fal result] ${endpoint} request_id=${requestId} completed with no image:`, JSON.stringify(result && result.data));
+    return { status: 'failed', error: 'Fal completed but returned no image.' };
   }
-  return image.url;
+  return { status: 'complete', imageUrl: image.url };
 }
 
 async function configStatus() {
@@ -210,21 +194,37 @@ Return ONLY a JSON object of this exact shape, no prose:
   const slides = (Array.isArray(picked.slides) ? picked.slides : []).slice(0, Number(frameCount));
   if (!slides.length) throw new Error('Claude did not return any slide picks.');
 
-  console.log(`[render-carousel] rendering ${slides.length} slide(s) in parallel`);
+  const renderJobId = Math.random().toString(36).slice(2, 10);
+  console.log(`[render-carousel] renderJobId=${renderJobId} submitting ${slides.length} slide job(s)`);
 
-  // Netlify's synchronous function timeout can't absorb N sequential GPT Image calls.
-  // Run them concurrently so total wall-clock time is roughly one slide, not N slides.
-  const frames = await Promise.all(slides.map(async (slide) => {
+  const submitted = await Promise.all(slides.map(async (slide) => {
     const photo = photos.find((p) => p.id === slide.photoId) || photos[0] || null;
     const imagePrompt = `Instagram carousel slide for the brand ${brand.name}. Bold uppercase headline text reading "${slide.hook}". ${photo ? `Featured product: ${photo.label}.` : ''} Brand color palette: ${(brand.colors || []).join(', ')}. Editorial studio lighting, high contrast, premium streetwear aesthetic, 4:5 portrait aspect ratio, no watermark, no border.`;
-    const imageUrl = await renderSlideImage(imagePrompt, photo && photo.dataUrl);
-    return { n: slide.n, hook: slide.hook, photoLabel: photo ? photo.label : '', imageUrl };
+    const job = await submitSlideJob(imagePrompt, photo && photo.dataUrl);
+    return { n: slide.n, hook: slide.hook, photoLabel: photo ? photo.label : '', endpoint: job.endpoint, requestId: job.requestId };
   }));
 
-  frames.sort((a, b) => a.n - b.n);
-  console.log(`[render-carousel] done, ${frames.length} image(s) returned`);
+  submitted.sort((a, b) => a.n - b.n);
+  console.log(`[render-carousel] renderJobId=${renderJobId} submitted ${submitted.length} job(s)`);
 
-  return json(200, { frames });
+  return json(200, { renderJobId, slides: submitted });
+}
+
+async function renderStatus(event) {
+  const { jobs } = parseBody(event);
+  if (!Array.isArray(jobs) || !jobs.length) return json(400, { error: 'Missing jobs array.' });
+
+  const slides = await Promise.all(jobs.map(async (job) => {
+    try {
+      const check = await checkSlideJob(job.endpoint, job.requestId);
+      return Object.assign({ n: job.n }, check);
+    } catch (err) {
+      console.error(`[render-status] job n=${job.n} (${job.endpoint}/${job.requestId}) failed:`, err.message);
+      return { n: job.n, status: 'failed', error: err.message };
+    }
+  }));
+
+  return json(200, { slides });
 }
 
 async function schedulePost(event) {
@@ -286,6 +286,7 @@ exports.handler = async (event) => {
     if (event.httpMethod === 'GET' && route === 'config-status') return await configStatus();
     if (event.httpMethod === 'POST' && route === 'generate-ideas') return await generateIdeas(event);
     if (event.httpMethod === 'POST' && route === 'render-carousel') return await renderCarousel(event);
+    if (event.httpMethod === 'POST' && route === 'render-status') return await renderStatus(event);
     if (event.httpMethod === 'POST' && route === 'schedule') return await schedulePost(event);
     if (event.httpMethod === 'GET' && route === 'blotato/accounts') return await blotatoAccounts();
 
