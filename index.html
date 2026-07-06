@@ -336,11 +336,18 @@
     updateIdea(id, { frameCount: Math.max(3, idea.frameCount - 1) });
   }
 
+  // gpt-image-2 can take longer than any serverless function is allowed to run,
+  // so rendering is submit-then-poll: /api/render-carousel just enqueues one Fal
+  // job per slide and returns immediately; /api/render-status is polled every
+  // ~2.5s until every slide is complete or failed.
+  var RENDER_POLL_INTERVAL_MS = 2500;
+  var RENDER_MAX_POLLS = 48; // ~2 minutes of polling before giving up client-side
+
   function onMakeImages(id) {
     var idea = findIdea(id);
     if (!idea) return;
     var brand = state.brand;
-    updateIdea(id, { imagesStatus: 'generating', renderError: null });
+    updateIdea(id, { imagesStatus: 'generating', renderError: null, frames: [] });
 
     fetch('/api/render-carousel', {
       method: 'POST',
@@ -355,11 +362,72 @@
         }
       })
     }).then(parseJsonResponse).then(function (result) {
-      if (!result.ok) throw new Error((result.data && result.data.error) || 'Failed to render carousel.');
-      updateIdea(id, { imagesStatus: 'ready', frames: result.data.frames || [] });
+      if (!result.ok) throw new Error((result.data && result.data.error) || 'Failed to start render.');
+      var slides = result.data.slides || [];
+      if (!slides.length) throw new Error('No slides were submitted.');
+      var frames = slides.map(function (s) {
+        return { n: s.n, hook: s.hook, photoLabel: s.photoLabel, endpoint: s.endpoint, requestId: s.requestId, imageUrl: null, status: 'pending', error: null };
+      });
+      updateIdea(id, { frames: frames });
+      pollRenderStatus(id, 0);
     }).catch(function (err) {
       updateIdea(id, { imagesStatus: 'none', renderError: err.message });
     });
+  }
+
+  function pollRenderStatus(id, attempt) {
+    var idea = findIdea(id);
+    if (!idea || idea.imagesStatus !== 'generating') return; // cancelled/replaced elsewhere
+
+    var pending = idea.frames.filter(function (f) { return f.status === 'pending'; });
+    if (!pending.length) { finishRender(id); return; }
+
+    if (attempt >= RENDER_MAX_POLLS) {
+      var timedOutFrames = idea.frames.map(function (f) {
+        return f.status === 'pending' ? Object.assign({}, f, { status: 'failed', error: 'Timed out waiting for Fal.' }) : f;
+      });
+      updateIdea(id, { frames: timedOutFrames });
+      finishRender(id);
+      return;
+    }
+
+    fetch('/api/render-status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jobs: pending.map(function (f) { return { n: f.n, endpoint: f.endpoint, requestId: f.requestId }; }) })
+    }).then(parseJsonResponse).then(function (result) {
+      if (!result.ok) throw new Error((result.data && result.data.error) || 'Failed to check render status.');
+      var updates = result.data.slides || [];
+      var current = findIdea(id);
+      if (!current) return;
+      var merged = current.frames.map(function (f) {
+        var u = updates.find(function (x) { return x.n === f.n; });
+        if (!u) return f;
+        if (u.status === 'complete') return Object.assign({}, f, { status: 'complete', imageUrl: u.imageUrl });
+        if (u.status === 'failed') return Object.assign({}, f, { status: 'failed', error: u.error });
+        return f;
+      });
+      updateIdea(id, { frames: merged });
+      if (merged.some(function (f) { return f.status === 'pending'; })) {
+        setTimeout(function () { pollRenderStatus(id, attempt + 1); }, RENDER_POLL_INTERVAL_MS);
+      } else {
+        finishRender(id);
+      }
+    }).catch(function (err) {
+      updateIdea(id, { imagesStatus: 'none', renderError: err.message });
+    });
+  }
+
+  function finishRender(id) {
+    var idea = findIdea(id);
+    if (!idea) return;
+    var frames = idea.frames || [];
+    var allFailed = frames.length > 0 && frames.every(function (f) { return f.status === 'failed'; });
+    if (allFailed) {
+      updateIdea(id, { imagesStatus: 'none', renderError: 'All slides failed to render — see errors above and try again.' });
+    } else {
+      updateIdea(id, { imagesStatus: 'ready' });
+    }
   }
 
   function onOpenIdea(id) { set({ openIdeaId: id }); }
@@ -749,13 +817,29 @@
 
   function renderModal(theme, c) {
     var frames = c.frames.map(function (fr) {
-      var bgStyle = fr.imageUrl ? ('background-image:url(' + fr.imageUrl + '); background-size:cover; background-position:center;') : ('background:' + fr.bg + ';');
-      return '<div style="width:200px; flex-shrink:0; aspect-ratio:4/5; border-radius:12px; position:relative; overflow:hidden; ' + bgStyle + ' border:1px solid ' + theme.border + ';">' +
-        '<div style="position:absolute; top:10px; left:10px; background:rgba(255,255,255,0.9); color:#173F35; font-size:11px; font-weight:700; padding:2px 8px; border-radius:999px;">' + fr.n + '</div>' +
+      var bgStyle = fr.imageUrl
+        ? ('background-image:url(' + fr.imageUrl + '); background-size:cover; background-position:center;')
+        : ('background:' + (fr.bg || theme.inputBg) + ';');
+      var overlay = '';
+      if (!fr.imageUrl && fr.status === 'pending') {
+        overlay = '<div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center;">' +
+          '<span style="width:18px; height:18px; border-radius:50%; border:2px solid ' + theme.border + '; border-top-color:' + ACCENT + '; display:inline-block; animation:rs-spin 0.7s linear infinite;"></span>' +
+        '</div>';
+      } else if (!fr.imageUrl && fr.status === 'failed') {
+        overlay = '<div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; padding:12px; text-align:center;">' +
+          '<span style="font-size:10.5px; font-weight:700; color:#C0392B; background:rgba(255,255,255,0.92); border-radius:8px; padding:6px 8px; line-height:1.3;">' + esc(fr.error || 'Failed to render') + '</span>' +
+        '</div>';
+      }
+      var textOverlay = fr.imageUrl ? (
         '<div style="position:absolute; inset:0; display:flex; flex-direction:column; justify-content:flex-end; padding:12px;">' +
           '<div style="font-family:\'Anton\', sans-serif; color:#fff; font-size:16px; line-height:1.15; text-shadow:0 2px 6px rgba(0,0,0,0.4); margin-bottom:6px; text-transform:uppercase;">' + esc(fr.hook) + '</div>' +
           '<div style="font-size:8.5px; letter-spacing:0.06em; color:rgba(255,255,255,0.8); text-transform:uppercase;">' + esc(fr.photoLabel) + '</div>' +
-        '</div>' +
+        '</div>'
+      ) : '';
+      return '<div style="width:200px; flex-shrink:0; aspect-ratio:4/5; border-radius:12px; position:relative; overflow:hidden; ' + bgStyle + ' border:1px solid ' + theme.border + ';">' +
+        '<div style="position:absolute; top:10px; left:10px; background:rgba(255,255,255,0.9); color:#173F35; font-size:11px; font-weight:700; padding:2px 8px; border-radius:999px;">' + fr.n + '</div>' +
+        overlay +
+        textOverlay +
       '</div>';
     }).join('');
 
