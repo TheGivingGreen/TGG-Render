@@ -1,0 +1,14 @@
+{
+  "name": "render-studio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "RENDER Studio — brand-to-Instagram-carousel generator",
+  "scripts": {
+    "start": "netlify dev",
+    "build": "echo \"No build step required\""
+  },
+  "dependencies": {
+    "@fal-ai/client": "^1.2.3"
+  },
+  "devDependencies": {}
+}
