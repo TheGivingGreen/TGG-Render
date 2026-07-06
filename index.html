@@ -139,6 +139,7 @@
       ideas: [],
       openIdeaId: null,
       generateError: null,
+      analyzeError: null,
       configStatus: null
     };
   }
@@ -236,9 +237,65 @@
   function toggleSidebar() { set({ sidebarCollapsed: !state.sidebarCollapsed }); }
   function toggleScheduledPopover() { set({ scheduledPopoverOpen: !state.scheduledPopoverOpen }); }
 
+  function isDefaultSampleAsset(p) {
+    return !p.dataUrl && ['Cargo Pant - Front', 'Raw Hoodie - Detail', 'Studio - Lookbook', 'Utility Vest - Flat Lay'].indexOf(p.label) !== -1;
+  }
+
+  function normalizeAnalyzedAssetId(asset) {
+    var id = asset.id;
+    return typeof id === 'number' ? id : nextId();
+  }
+
   function onAnalyze() {
-    set({ analyzing: true, analyzed: false });
-    setTimeout(function () { set({ analyzing: false, analyzed: true }); }, 900);
+    var url = (state.brandUrl || '').trim();
+    if (!url) {
+      set({ analyzeError: 'Paste a brand URL first.' });
+      return;
+    }
+    set({ analyzing: true, analyzed: false, analyzeError: null });
+
+    fetch('/api/analyze-brand', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: url })
+    }).then(parseJsonResponse).then(function (result) {
+      if (!result.ok) throw new Error((result.data && result.data.error) || 'Failed to analyze brand.');
+      var analyzedBrand = result.data.brand || {};
+      var existingUploads = (state.brand.photos || []).filter(function (p) { return p.dataUrl && /^data:/i.test(p.dataUrl) && !isDefaultSampleAsset(p); });
+      var analyzedPhotos = (analyzedBrand.photos || []).map(function (p) {
+        return {
+          id: normalizeAnalyzedAssetId(p),
+          label: p.label || 'Website asset',
+          role: p.role || 'reference',
+          dataUrl: p.dataUrl || null
+        };
+      });
+      var analyzedImagery = (analyzedBrand.imagery || []).map(function (im) {
+        return {
+          id: normalizeAnalyzedAssetId(im),
+          dataUrl: im.dataUrl || null,
+          bg: im.bg || '#2B2B2E'
+        };
+      });
+      var nextBrand = Object.assign({}, state.brand, {
+        name: analyzedBrand.name || state.brand.name,
+        colors: analyzedBrand.colors && analyzedBrand.colors.length ? analyzedBrand.colors : state.brand.colors,
+        vibeTags: analyzedBrand.vibeTags && analyzedBrand.vibeTags.length ? analyzedBrand.vibeTags : state.brand.vibeTags,
+        photos: analyzedPhotos.concat(existingUploads).slice(0, 10),
+        imagery: analyzedImagery.length ? analyzedImagery : state.brand.imagery
+      });
+      if (!nextBrand.photos.length) nextBrand.photos = existingUploads;
+      set({
+        brand: nextBrand,
+        ideas: [],
+        openIdeaId: null,
+        analyzed: true,
+        analyzing: false,
+        analyzeError: result.data.source && result.data.source.fetchError ? result.data.source.fetchError : null
+      });
+    }).catch(function (err) {
+      set({ analyzing: false, analyzed: true, analyzeError: err.message });
+    });
   }
 
   function onSwatchClick(i) { set({ activeSwatchIndex: state.activeSwatchIndex === i ? null : i }); }
@@ -836,6 +893,7 @@
             '<div data-action="analyze" style="width:36px; height:36px; flex-shrink:0; border-radius:10px; background:' + ACCENT + '; color:#fff; display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:15px;">→</div>' +
           '</div>' +
           '<div style="font-size:11.5px; color:' + theme.muted + '; margin-top:8px; line-height:1.5;">Paste a URL and hit enter. Reads the site’s fonts, colors, voice, and images.</div>' +
+          (state.analyzeError ? '<div style="font-size:11.5px; color:#F4D9A8; margin-top:8px; line-height:1.5;">' + esc(state.analyzeError) + '</div>' : '') +
         '</div>' +
         analyzedBlock +
       '</div>';
@@ -1179,6 +1237,7 @@
     var el = e.target;
     var bind = el.getAttribute && el.getAttribute('data-bind');
     if (bind === 'newTag') onNewTagKeyDown(e);
+    if (bind === 'brandUrl' && e.key === 'Enter') onAnalyze();
   }
 
   document.getElementById('rs-file-input').addEventListener('change', function (e) {
