@@ -1,0 +1,39 @@
+/* ==========================================================================
+   Giving Green — Typography tokens
+   FONT SUBSTITUTION NOTE: Giving Green has no proprietary typeface on file.
+   Nike's source system pairs a tall uppercase geometric display face with a
+   quiet UI/text grotesk. We follow that structure with two open Google Fonts:
+     display -> Anton      (condensed geometric uppercase, campaign headlines)
+     text    -> Work Sans  (grotesk, weights 400/500/600/700, UI + body)
+   Flag this substitution to the user; swap in real brand fonts if supplied.
+   ========================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Anton&family=Work+Sans:wght@400;500;600;700&display=swap');
+
+:root {
+  --font-display: 'Anton', 'Arial Narrow', sans-serif;
+  --font-text: 'Work Sans', 'Helvetica Neue', Arial, sans-serif;
+
+  /* ---- Scale (Nike's structure: one towering display tier, quiet 12-16px workhorse tier) ---- */
+  --text-display-campaign: 700 96px/0.92 var(--font-display);   /* editorial hero, uppercase */
+  --text-display-md: 700 56px/0.95 var(--font-display);         /* section-level campaign moments */
+
+  --text-heading-xl: 600 32px/1.2 var(--font-text);
+  --text-heading-lg: 600 24px/1.25 var(--font-text);
+  --text-heading-md: 600 16px/1.5 var(--font-text);
+
+  --text-body-md: 400 16px/1.5 var(--font-text);
+  --text-body-strong: 600 16px/1.5 var(--font-text);
+
+  --text-button-lg: 600 20px/1.2 var(--font-text);
+  --text-button-md: 600 16px/1.4 var(--font-text);
+  --text-button-sm: 600 14px/1.4 var(--font-text);
+
+  --text-link-md: 500 16px/1.6 var(--font-text);
+  --text-caption-md: 500 14px/1.5 var(--font-text);
+  --text-caption-sm: 500 12px/1.5 var(--font-text);
+  --text-utility-xs: 500 11px/1.6 var(--font-text);
+
+  --tracking-display: 0.01em;
+  --tracking-caption: 0.02em;
+}

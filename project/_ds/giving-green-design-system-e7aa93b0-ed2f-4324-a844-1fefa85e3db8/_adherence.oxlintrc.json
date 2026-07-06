@@ -1,0 +1,242 @@
+{
+  "plugins": [
+    "react",
+    "import"
+  ],
+  "rules": {
+    "react/forbid-elements": [
+      "warn",
+      {
+        "forbid": []
+      }
+    ],
+    "no-restricted-imports": [
+      "warn",
+      {
+        "patterns": [
+          {
+            "group": [
+              "components/core/**"
+            ],
+            "message": "Import design-system components from 'index.js', not component internals."
+          }
+        ]
+      }
+    ],
+    "no-restricted-syntax": [
+      "warn",
+      {
+        "selector": "Literal[value=/#[0-9a-fA-F]{3,8}\\b/]",
+        "message": "Raw hex color — use a design-system color token via var()."
+      },
+      {
+        "selector": "Literal[value=/\\b\\d+px\\b/]",
+        "message": "Raw px value — use a design-system spacing token via var()."
+      },
+      {
+        "selector": "Literal[value=/font-family\\s*:\\s*(?!['\\\"]?(?:Anton|Work Sans))/i]",
+        "message": "Font not provided by the design system. Available: Anton, Work Sans."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Badge'] > JSXAttribute > JSXIdentifier[name!=/^(?:variant|children|key|ref|className|style|children)$/]",
+        "message": "<Badge> doesn't accept that prop. Declared props: variant, children."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Badge'] > JSXAttribute[name.name='variant'] > Literal[value!=/^(?:promo|achievement|highlight)$/]",
+        "message": "<Badge> variant must be one of 'promo' | 'achievement' | 'highlight'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Button'] > JSXAttribute > JSXIdentifier[name!=/^(?:variant|size|icon|disabled|onClick|children|key|ref|className|style|children)$/]",
+        "message": "<Button> doesn't accept that prop. Declared props: variant, size, icon, disabled, onClick, children."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Button'] > JSXAttribute[name.name='variant'] > Literal[value!=/^(?:primary|secondary|outline-on-image|icon)$/]",
+        "message": "<Button> variant must be one of 'primary' | 'secondary' | 'outline-on-image' | 'icon'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Button'] > JSXAttribute[name.name='size'] > Literal[value!=/^(?:lg|md|sm)$/]",
+        "message": "<Button> size must be one of 'lg' | 'md' | 'sm'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Chip'] > JSXAttribute > JSXIdentifier[name!=/^(?:active|onClick|children|key|ref|className|style|children)$/]",
+        "message": "<Chip> doesn't accept that prop. Declared props: active, onClick, children."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='SearchInput'] > JSXAttribute > JSXIdentifier[name!=/^(?:placeholder|value|onChange|key|ref|className|style|children)$/]",
+        "message": "<SearchInput> doesn't accept that prop. Declared props: placeholder, value, onChange."
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": [
+        "**/index.js"
+      ],
+      "rules": {
+        "no-restricted-imports": "off"
+      }
+    }
+  ],
+  "x-omelette": {
+    "components": {
+      "Badge": {
+        "replaces": []
+      },
+      "Button": {
+        "replaces": []
+      },
+      "Chip": {
+        "replaces": []
+      },
+      "SearchInput": {
+        "replaces": []
+      }
+    },
+    "tokens": [
+      "--color-achievement",
+      "--color-highlight",
+      "--color-info",
+      "--color-success",
+      "--color-success-bright",
+      "--cream",
+      "--cream-deep",
+      "--font-display",
+      "--font-text",
+      "--forest-green",
+      "--forest-green-deep",
+      "--forest-green-soft",
+      "--giving-red",
+      "--giving-red-deep",
+      "--giving-red-pale",
+      "--gold",
+      "--gold-deep",
+      "--gold-pale",
+      "--hairline",
+      "--hairline-on-dark",
+      "--hairline-soft",
+      "--ink",
+      "--ink-charcoal",
+      "--ink-mute",
+      "--ink-on-dark",
+      "--ink-on-dark-mute",
+      "--ink-stone",
+      "--radius-lg",
+      "--radius-md",
+      "--radius-none",
+      "--radius-pill",
+      "--radius-sm",
+      "--shadow-card",
+      "--shadow-inset-hairline",
+      "--shadow-raised",
+      "--soft-green",
+      "--soft-green-deep",
+      "--soft-green-pale",
+      "--space-lg",
+      "--space-md",
+      "--space-section",
+      "--space-section-sm",
+      "--space-sm",
+      "--space-xl",
+      "--space-xs",
+      "--space-xxl",
+      "--space-xxs",
+      "--surface-canvas",
+      "--surface-card",
+      "--surface-inverse",
+      "--surface-primary",
+      "--surface-sunken",
+      "--text-body-md",
+      "--text-body-strong",
+      "--text-button-lg",
+      "--text-button-md",
+      "--text-button-sm",
+      "--text-caption-md",
+      "--text-caption-sm",
+      "--text-display-campaign",
+      "--text-display-md",
+      "--text-heading-lg",
+      "--text-heading-md",
+      "--text-heading-xl",
+      "--text-link-md",
+      "--text-utility-xs",
+      "--tracking-caption",
+      "--tracking-display",
+      "--white"
+    ],
+    "tokenKinds": {
+      "--forest-green": "color",
+      "--forest-green-deep": "color",
+      "--forest-green-soft": "color",
+      "--cream": "color",
+      "--cream-deep": "color",
+      "--white": "color",
+      "--giving-red": "color",
+      "--giving-red-deep": "color",
+      "--giving-red-pale": "color",
+      "--gold": "color",
+      "--gold-deep": "color",
+      "--gold-pale": "color",
+      "--soft-green": "color",
+      "--soft-green-deep": "color",
+      "--soft-green-pale": "color",
+      "--ink": "color",
+      "--ink-charcoal": "color",
+      "--ink-mute": "color",
+      "--ink-stone": "color",
+      "--ink-on-dark": "color",
+      "--ink-on-dark-mute": "color",
+      "--hairline": "color",
+      "--hairline-soft": "color",
+      "--hairline-on-dark": "color",
+      "--color-success": "color",
+      "--color-success-bright": "color",
+      "--color-highlight": "color",
+      "--color-achievement": "color",
+      "--color-info": "color",
+      "--surface-primary": "color",
+      "--surface-canvas": "color",
+      "--surface-card": "color",
+      "--surface-sunken": "color",
+      "--surface-inverse": "color",
+      "--font-display": "font",
+      "--font-text": "font",
+      "--text-display-campaign": "font",
+      "--text-display-md": "font",
+      "--text-heading-xl": "font",
+      "--text-heading-lg": "font",
+      "--text-heading-md": "font",
+      "--text-body-md": "font",
+      "--text-body-strong": "font",
+      "--text-button-lg": "font",
+      "--text-button-md": "font",
+      "--text-button-sm": "font",
+      "--text-link-md": "font",
+      "--text-caption-md": "font",
+      "--text-caption-sm": "font",
+      "--text-utility-xs": "font",
+      "--tracking-display": "font",
+      "--tracking-caption": "font",
+      "--space-xxs": "spacing",
+      "--space-xs": "spacing",
+      "--space-sm": "spacing",
+      "--space-md": "spacing",
+      "--space-lg": "spacing",
+      "--space-xl": "spacing",
+      "--space-xxl": "spacing",
+      "--space-section": "spacing",
+      "--space-section-sm": "spacing",
+      "--radius-none": "radius",
+      "--radius-sm": "radius",
+      "--radius-md": "radius",
+      "--radius-lg": "radius",
+      "--radius-pill": "radius",
+      "--shadow-card": "shadow",
+      "--shadow-raised": "shadow",
+      "--shadow-inset-hairline": "shadow"
+    },
+    "fontFamilies": [
+      "Anton",
+      "Work Sans"
+    ]
+  }
+}

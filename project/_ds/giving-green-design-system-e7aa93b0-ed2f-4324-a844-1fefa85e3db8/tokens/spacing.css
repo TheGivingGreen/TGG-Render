@@ -1,0 +1,36 @@
+/* ==========================================================================
+   Giving Green — Spacing, radius & elevation tokens
+   Spacing scale follows the Nike source's 8px-base rhythm.
+   Radius diverges deliberately: Nike keeps cards at 0 radius (photography-led
+   retail chrome). Giving Green is a research/donation nonprofit, not a
+   product catalog — cards get a modest 16px radius for warmth, while CTAs
+   keep the source's signature full pill shape.
+   ========================================================================== */
+
+:root {
+  /* ---- Spacing (8px base) ---- */
+  --space-xxs: 2px;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 18px;
+  --space-xl: 24px;
+  --space-xxl: 32px;
+  --space-section: 64px;
+  --space-section-sm: 40px;
+
+  /* ---- Radius ---- */
+  --radius-none: 0px;
+  --radius-sm: 8px;
+  --radius-md: 16px;
+  --radius-lg: 20px;
+  --radius-pill: 999px;
+
+  /* ---- Elevation ----
+     Kept minimal per the source's flat retail-chrome philosophy, with one
+     soft shadow added because white cards need to lift off cream (Nike's
+     cards sit on white and need none). */
+  --shadow-card: 0 1px 2px rgba(23, 63, 53, 0.06), 0 8px 24px rgba(23, 63, 53, 0.08);
+  --shadow-raised: 0 4px 12px rgba(23, 63, 53, 0.12), 0 16px 40px rgba(23, 63, 53, 0.14);
+  --shadow-inset-hairline: inset 0 -1px 0 var(--hairline-soft);
+}

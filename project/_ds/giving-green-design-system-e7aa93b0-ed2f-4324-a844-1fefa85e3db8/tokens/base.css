@@ -1,0 +1,12 @@
+/* Giving Green — base element reset. Uses tokens only. */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--surface-canvas);
+  color: var(--ink);
+  font: var(--text-body-md);
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3, h4, p, figure { margin: 0; }
+button { font-family: inherit; cursor: pointer; }
+img { max-width: 100%; display: block; }
