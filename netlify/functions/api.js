@@ -171,13 +171,19 @@ Return ONLY a JSON object of this exact shape, no prose:
   const slides = (Array.isArray(picked.slides) ? picked.slides : []).slice(0, Number(frameCount));
   if (!slides.length) throw new Error('Claude did not return any slide picks.');
 
-  const frames = [];
-  for (const slide of slides) {
+  console.log(`[render-carousel] rendering ${slides.length} slide(s) in parallel`);
+
+  // Netlify's synchronous function timeout can't absorb N sequential GPT Image calls.
+  // Run them concurrently so total wall-clock time is roughly one slide, not N slides.
+  const frames = await Promise.all(slides.map(async (slide) => {
     const photo = photos.find((p) => p.id === slide.photoId) || photos[0] || null;
     const imagePrompt = `Instagram carousel slide for the brand ${brand.name}. Bold uppercase headline text reading "${slide.hook}". ${photo ? `Featured product: ${photo.label}.` : ''} Brand color palette: ${(brand.colors || []).join(', ')}. Editorial studio lighting, high contrast, premium streetwear aesthetic, 4:5 portrait aspect ratio, no watermark, no border.`;
     const imageUrl = await renderSlideImage(imagePrompt, photo && photo.dataUrl);
-    frames.push({ n: slide.n, hook: slide.hook, photoLabel: photo ? photo.label : '', imageUrl });
-  }
+    return { n: slide.n, hook: slide.hook, photoLabel: photo ? photo.label : '', imageUrl };
+  }));
+
+  frames.sort((a, b) => a.n - b.n);
+  console.log(`[render-carousel] done, ${frames.length} image(s) returned`);
 
   return json(200, { frames });
 }
