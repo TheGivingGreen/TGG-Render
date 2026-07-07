@@ -612,8 +612,8 @@ async function renderStatus(event) {
 }
 
 async function downloadImage(event) {
-  const params = event.queryStringParameters || {};
-  const imageUrl = params.url;
+  const params = event.httpMethod === 'POST' ? parseBody(event) : (event.queryStringParameters || {});
+  const imageUrl = params.url || params.imageUrl;
   const filename = safeFilename(params.filename || 'render-studio-slide.png', 'render-studio-slide.png');
   if (!imageUrl) return json(400, { error: 'Missing image URL.' });
 
@@ -712,7 +712,7 @@ exports.handler = async (event) => {
     if (event.httpMethod === 'POST' && route === 'render-carousel') return await renderCarousel(event);
     if (event.httpMethod === 'POST' && route === 'render-slide') return await renderSlide(event);
     if (event.httpMethod === 'POST' && route === 'render-status') return await renderStatus(event);
-    if (event.httpMethod === 'GET' && route === 'download-image') return await downloadImage(event);
+    if ((event.httpMethod === 'GET' || event.httpMethod === 'POST') && route === 'download-image') return await downloadImage(event);
     if (event.httpMethod === 'POST' && route === 'download-carousel') return await downloadCarousel(event);
     if (event.httpMethod === 'POST' && route === 'schedule') return await schedulePost(event);
     if (event.httpMethod === 'GET' && route === 'blotato/accounts') return await blotatoAccounts();
