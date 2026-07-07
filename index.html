@@ -201,6 +201,7 @@
   var root = document.getElementById('app');
   var eventsBound = false;
   var brandVoiceSaveTimer = null;
+  var pendingDownloadUrls = [];
 
   function set(patch) {
     if (typeof patch === 'function') patch = patch(state);
@@ -686,8 +687,12 @@
   }
   function downloadBlob(blob, filename) {
     var url = URL.createObjectURL(blob);
+    pendingDownloadUrls.push(url);
     downloadUrl(url, filename);
-    setTimeout(function () { URL.revokeObjectURL(url); }, 1500);
+    setTimeout(function () {
+      URL.revokeObjectURL(url);
+      pendingDownloadUrls = pendingDownloadUrls.filter(function (item) { return item !== url; });
+    }, 120000);
   }
   function onOpenIdea(id) { set({ openIdeaId: id }); }
   function onCloseModal() { set({ openIdeaId: null, openFrame: null }); }
