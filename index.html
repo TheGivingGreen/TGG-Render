@@ -46,6 +46,7 @@
 <body>
 <div id="app"></div>
 <input type="file" id="rs-file-input" accept="image/*" style="display:none">
+<input type="file" id="rs-voice-file-input" accept=".txt,.md,text/plain,text/markdown" style="display:none">
 
 <script>
 (function () {
@@ -53,6 +54,7 @@
 
   var ACCENT = '#FF5A5F';
   var STORAGE_KEY = 'renderStudio.v1';
+  var BRAND_VOICE_STORAGE_KEY = 'tgg_brand_voice';
 
   var FONT_PAIRS = [
     { key: 'archivo-inter', name: 'Archivo Black', heading: "'Archivo Black', sans-serif", body: "'Inter', sans-serif" },
@@ -141,7 +143,9 @@
       openFrame: null,
       generateError: null,
       analyzeError: null,
-      configStatus: null
+      configStatus: null,
+      brandVoice: '',
+      brandVoiceExpanded: false
     };
   }
 
@@ -156,6 +160,10 @@
         });
       }
     } catch (e) { /* corrupt storage, fall back to defaults */ }
+
+    try {
+      base.brandVoice = localStorage.getItem(BRAND_VOICE_STORAGE_KEY) || '';
+    } catch (e) { /* brand voice storage unavailable, continue in-memory only */ }
 
     var maxId = 100;
     (base.brand.photos || []).forEach(function (p) { if (p.id > maxId) maxId = p.id; });
@@ -192,6 +200,7 @@
   var state = loadState();
   var root = document.getElementById('app');
   var eventsBound = false;
+  var brandVoiceSaveTimer = null;
 
   function set(patch) {
     if (typeof patch === 'function') patch = patch(state);
@@ -221,6 +230,36 @@
     setSilent({ ideas: state.ideas.map(function (i) { return i.id === id ? Object.assign({}, i, patch) : i; }) });
   }
   function findIdea(id) { return state.ideas.find(function (i) { return i.id === id; }); }
+
+  function currentBrandVoice() {
+    return String(state.brandVoice || '');
+  }
+
+  function saveBrandVoiceNow(value) {
+    try {
+      if (String(value || '').trim()) {
+        localStorage.setItem(BRAND_VOICE_STORAGE_KEY, value);
+      } else {
+        localStorage.removeItem(BRAND_VOICE_STORAGE_KEY);
+      }
+    } catch (e) { /* storage unavailable, continue in-memory only */ }
+  }
+
+  function updateBrandVoiceStatus(value) {
+    var status = root.querySelector('[data-brand-voice-status]');
+    if (!status) return;
+    var hasVoice = String(value || '').trim().length > 0;
+    status.textContent = hasVoice ? 'Voice loaded' : 'No voice file';
+    status.style.color = hasVoice ? '#9BC7A5' : state.darkMode ? '#B9CBC1' : '#5D7C62';
+  }
+
+  function scheduleBrandVoiceSave(value) {
+    clearTimeout(brandVoiceSaveTimer);
+    brandVoiceSaveTimer = setTimeout(function () {
+      saveBrandVoiceNow(value);
+      updateBrandVoiceStatus(value);
+    }, 500);
+  }
 
   function buildDefaultRenderPrompt(idea, brand) {
     var assets = (brand.photos || []).map(function (p) {
@@ -332,6 +371,29 @@
     pendingUpload = { kind: kind, id: id };
     document.getElementById('rs-file-input').click();
   }
+  function toggleBrandVoice() { set({ brandVoiceExpanded: !state.brandVoiceExpanded }); }
+  function triggerBrandVoiceUpload() { document.getElementById('rs-voice-file-input').click(); }
+  function clearBrandVoice() {
+    if (!window.confirm('Remove brand voice file?')) return;
+    clearTimeout(brandVoiceSaveTimer);
+    saveBrandVoiceNow('');
+    set({ brandVoice: '', brandVoiceExpanded: false });
+  }
+  function onBrandVoiceFileChosen(file) {
+    if (!file) return;
+    var name = file.name || '';
+    if (!/\.(txt|md)$/i.test(name)) {
+      window.alert('Please upload a .txt or .md file.');
+      return;
+    }
+    var reader = new FileReader();
+    reader.onload = function () {
+      var text = String(reader.result || '');
+      saveBrandVoiceNow(text);
+      set({ brandVoice: text, brandVoiceExpanded: true });
+    };
+    reader.readAsText(file);
+  }
   function humanizeFilename(name) {
     return name.replace(/\.[^/.]+$/, '').replace(/[-_]+/g, ' ').replace(/\b\w/g, function (ch) { return ch.toUpperCase(); });
   }
@@ -376,7 +438,7 @@
     fetch('/api/generate-ideas', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic: topic, count: count, brand: { name: brand.name, colors: brand.colors, vibeTags: brand.vibeTags } })
+      body: JSON.stringify({ topic: topic, count: count, brandVoice: currentBrandVoice(), brand: { name: brand.name, colors: brand.colors, vibeTags: brand.vibeTags } })
     }).then(parseJsonResponse).then(function (result) {
       if (!result.ok) throw new Error((result.data && result.data.error) || 'Failed to generate ideas.');
       var ideas = (result.data.ideas || []).map(function (c) {
@@ -442,7 +504,7 @@
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        idea: { title: idea.title, concept: idea.concept, renderPrompt: renderPrompt },
+        idea: { title: idea.title, concept: idea.concept, renderPrompt: renderPrompt, brandVoice: currentBrandVoice() },
         frameCount: idea.frameCount,
         brand: {
           name: brand.name,
@@ -498,7 +560,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          idea: { title: idea.title, concept: idea.concept, renderPrompt: renderPrompt },
+          idea: { title: idea.title, concept: idea.concept, renderPrompt: renderPrompt, brandVoice: currentBrandVoice() },
           brand: {
             name: brand.name,
             colors: brand.colors,
@@ -890,6 +952,24 @@
           '<span data-action="remove-tag" data-idx="' + i + '" style="cursor:pointer; color:' + theme.muted + '; font-size:13px; line-height:1; padding:2px;">×</span>' +
         '</div>';
       }).join('');
+      var hasBrandVoice = currentBrandVoice().trim().length > 0;
+      var brandVoiceTextarea = state.brandVoiceExpanded
+        ? '<textarea data-bind="brand-voice" placeholder="Paste your voice rules here..." style="width:100%; min-height:96px; max-height:200px; overflow:auto; resize:vertical; border:1px solid ' + theme.border + '; border-radius:9px; padding:9px 10px; background:' + theme.inputBg + '; color:' + theme.text + '; font-family:\'Space Mono\', monospace; font-size:11.5px; line-height:1.45;">' + esc(state.brandVoice) + '</textarea>'
+        : '<div data-action="toggle-brand-voice" style="border:1px dashed ' + theme.border + '; border-radius:9px; padding:9px 10px; cursor:pointer; color:' + theme.muted + '; font-size:11.5px; line-height:1.45;">' + (hasBrandVoice ? 'Brand voice saved. Click to edit.' : 'Click to add brand voice rules.') + '</div>';
+      var brandVoiceBlock = '<div>' +
+        '<div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px;">' +
+          '<div style="font:var(--text-utility-xs); color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.06em;">Brand Voice</div>' +
+          '<div data-brand-voice-status style="font-size:11px; color:' + (hasBrandVoice ? '#9BC7A5' : theme.muted) + ';">' + (hasBrandVoice ? 'Voice loaded' : 'No voice file') + '</div>' +
+        '</div>' +
+        '<div style="display:flex; flex-direction:column; gap:8px;">' +
+          brandVoiceTextarea +
+          '<div style="display:flex; align-items:center; gap:6px;">' +
+            '<button type="button" data-action="upload-brand-voice" style="flex:1; border:1px solid ' + theme.border + '; border-radius:8px; padding:7px 9px; background:' + theme.chipBg + '; color:' + theme.text + '; font:inherit; font-size:11.5px; font-weight:700; cursor:pointer;">Upload .txt or .md file</button>' +
+            '<button type="button" data-action="toggle-brand-voice" style="border:1px solid ' + theme.border + '; border-radius:8px; padding:7px 9px; background:transparent; color:' + theme.muted + '; font:inherit; font-size:11.5px; font-weight:700; cursor:pointer;">' + (state.brandVoiceExpanded ? 'Collapse' : 'Edit') + '</button>' +
+            (hasBrandVoice ? '<button type="button" data-action="clear-brand-voice" style="border:1px solid rgba(255,90,95,0.35); border-radius:8px; padding:7px 9px; background:rgba(255,90,95,0.08); color:' + ACCENT + '; font:inherit; font-size:11.5px; font-weight:800; cursor:pointer;">Clear</button>' : '') +
+          '</div>' +
+        '</div>' +
+      '</div>';
 
       var imagery = brand.imagery.map(function (im) {
         var imBg = im.dataUrl ? ('background-image:url(' + im.dataUrl + '); background-size:cover; background-position:center;') : ('background:' + im.bg + ';');
@@ -947,6 +1027,7 @@
               '<input data-bind="newTag" value="' + esc(state.newTagValue) + '" placeholder="+ add" style="width:60px; font-size:12px; border:1px dashed ' + theme.border + '; border-radius:999px; padding:5px 10px; font-family:inherit; background:transparent; color:' + theme.text + ';" />' +
             '</div>' +
           '</div>' +
+          brandVoiceBlock +
           '<div>' +
             '<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">' +
               '<div style="font:var(--text-utility-xs); color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.06em;">Imagery</div>' +
@@ -1314,6 +1395,9 @@
       case 'swatch-click': onSwatchClick(Number(el.getAttribute('data-idx'))); break;
       case 'pick-color': onPickColor(Number(el.getAttribute('data-idx')), el.getAttribute('data-hex')); break;
       case 'remove-tag': onRemoveTag(Number(el.getAttribute('data-idx'))); break;
+      case 'toggle-brand-voice': toggleBrandVoice(); break;
+      case 'upload-brand-voice': triggerBrandVoiceUpload(); break;
+      case 'clear-brand-voice': clearBrandVoice(); break;
       case 'add-imagery': triggerUpload('imagery', null); break;
       case 'replace-imagery': triggerUpload('imagery', idNum); break;
       case 'add-photo': triggerUpload('photo', null); break;
@@ -1346,6 +1430,12 @@
     if (!bind) return;
     if (bind === 'newTag') { setSilent({ newTagValue: el.value }); return; }
     if (bind === 'brandUrl') { setSilent({ brandUrl: el.value }); return; }
+    if (bind === 'brand-voice') {
+      setSilent({ brandVoice: el.value });
+      updateBrandVoiceStatus(el.value);
+      scheduleBrandVoiceSave(el.value);
+      return;
+    }
     if (bind === 'topic') { setSilent({ topic: el.value }); return; }
     if (bind === 'caption') { updateIdeaSilent(Number(el.getAttribute('data-id')), { caption: el.value }); return; }
     if (bind === 'render-prompt') { updateIdeaSilent(Number(el.getAttribute('data-id')), { renderPrompt: el.value }); return; }
@@ -1382,6 +1472,12 @@
     var file = e.target.files && e.target.files[0];
     e.target.value = '';
     onFileChosen(file);
+  });
+
+  document.getElementById('rs-voice-file-input').addEventListener('change', function (e) {
+    var file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    onBrandVoiceFileChosen(file);
   });
 
   fetch('/api/config-status').then(function (r) { return r.json(); }).then(function (data) {

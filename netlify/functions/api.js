@@ -439,14 +439,17 @@ Return ONLY JSON in this exact shape:
 }
 
 async function generateIdeas(event) {
-  const { topic, count, brand } = parseBody(event);
+  const { topic, count, brand, brandVoice } = parseBody(event);
   if (!topic || !count || !brand) return json(400, { error: 'Missing topic, count, or brand.' });
+  const creativeDirectionBlock = buildCreativeDirectionBlock(topic, brandVoice);
 
   const prompt = `You are the social media creative director for the brand "${brand.name}".
 Brand voice/vibe: ${(brand.vibeTags || []).join(', ')}.
 Brand colors (hex): ${(brand.colors || []).join(', ')}.
 
-Write ${count} distinct Instagram carousel post ideas for this creative direction: "${topic}".
+Write ${count} distinct Instagram carousel post ideas using this request:
+${creativeDirectionBlock}
+
 Each idea needs a different creative angle. Do not repeat the same concept.
 
 Return ONLY a JSON object of this exact shape, no prose:
@@ -458,6 +461,23 @@ Return ONLY a JSON object of this exact shape, no prose:
   const ideas = Array.isArray(parsed.ideas) ? parsed.ideas.slice(0, Number(count)) : [];
   if (!ideas.length) throw new Error('Claude did not return any ideas.');
   return json(200, { ideas });
+}
+
+function normalizeBrandVoice(brandVoice) {
+  const voice = String(brandVoice || '');
+  return voice.trim() ? voice : '';
+}
+
+function buildCreativeDirectionBlock(topic, brandVoice) {
+  const voice = normalizeBrandVoice(brandVoice);
+  if (!voice) return `CREATIVE DIRECTION:\n${topic}`;
+  return `---
+BRAND VOICE AND RULES:
+${voice}
+---
+CREATIVE DIRECTION:
+${topic}
+---`;
 }
 
 function assetSummary(photos) {
@@ -476,13 +496,22 @@ function buildImagePrompt({ brand, idea, slide, photo }) {
     ? `Use uploaded asset "${photo.label}" as a ${photo.role || 'reference'} reference.`
     : 'No uploaded asset was selected for this slide.';
 
-  return `${basePrompt}
+  const visualInstructions = `${basePrompt}
 
 Slide ${slide.n}: bold uppercase headline text reading "${slide.hook}".
 ${assetLine}
 Available uploaded assets: ${JSON.stringify(assetSummary(Array.isArray(brand.photos) ? brand.photos : []))}.
 Brand color palette: ${(brand.colors || []).join(', ')}.
 Editorial studio lighting, high contrast, premium social carousel composition, 4:5 portrait aspect ratio, no watermark, no border.`;
+  const voice = normalizeBrandVoice(idea && idea.brandVoice);
+  if (!voice) return visualInstructions;
+  return `---
+BRAND VOICE AND RULES (follow strictly):
+${voice}
+---
+VISUAL INSTRUCTIONS:
+${visualInstructions}
+---`;
 }
 
 async function submitRenderedSlide({ brand, idea, slide }) {
