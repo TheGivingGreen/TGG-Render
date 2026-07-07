@@ -707,17 +707,7 @@
     var frame = getFrame(ideaId, slideNumber);
     if (!idea || !frame || !frame.imageUrl) return;
     var filename = slugify(state.brand.name + '-' + idea.title + '-slide-' + frame.n, 'render-studio-slide') + '.png';
-    fetch('/api/download-image?url=' + encodeURIComponent(frame.imageUrl) + '&filename=' + encodeURIComponent(filename))
-      .then(function (resp) {
-        if (!resp.ok) return resp.json().catch(function () { return {}; }).then(function (data) { throw new Error(data.error || 'Failed to download slide.'); });
-        return resp.blob();
-      })
-      .then(function (blob) {
-        downloadBlob(blob, filename);
-      })
-      .catch(function (err) {
-        updateIdea(ideaId, { renderError: err.message });
-      });
+    downloadUrl('/api/download-image?url=' + encodeURIComponent(frame.imageUrl) + '&filename=' + encodeURIComponent(filename), filename);
   }
   function onDownloadCarousel(ideaId) {
     var idea = findIdea(ideaId);

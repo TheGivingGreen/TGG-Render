@@ -65,12 +65,28 @@ function safeRemoteImageUrl(rawUrl) {
 
 async function fetchImageBuffer(rawUrl) {
   const url = safeRemoteImageUrl(rawUrl);
-  const resp = await fetch(url);
+  const resp = await fetch(url, {
+    headers: {
+      Accept: 'image/avif,image/webp,image/png,image/jpeg,image/*,*/*;q=0.8',
+      'User-Agent': 'RenderStudio/1.0'
+    }
+  });
   if (!resp.ok) throw new Error(`Image download failed (${resp.status}).`);
-  const contentType = resp.headers.get('content-type') || 'image/png';
-  if (!/^image\//i.test(contentType)) throw new Error(`URL did not return an image (${contentType}).`);
+  const declaredType = (resp.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
   const arr = await resp.arrayBuffer();
-  return { buffer: Buffer.from(arr), contentType };
+  const buffer = Buffer.from(arr);
+  const contentType = detectImageContentType(buffer, declaredType);
+  if (!contentType) throw new Error(`URL did not return a supported image (${declaredType || 'unknown content type'}).`);
+  return { buffer, contentType };
+}
+
+function detectImageContentType(buffer, declaredType) {
+  if (/^image\//i.test(declaredType)) return declaredType;
+  if (buffer.length >= 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) return 'image/png';
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return 'image/jpeg';
+  if (buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
+  if (buffer.length >= 6 && (buffer.toString('ascii', 0, 6) === 'GIF87a' || buffer.toString('ascii', 0, 6) === 'GIF89a')) return 'image/gif';
+  return '';
 }
 
 function crc32(buffer) {
