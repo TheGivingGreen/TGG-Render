@@ -19,6 +19,28 @@ function json(statusCode, body) {
   };
 }
 
+function binary(statusCode, bodyBuffer, headers) {
+  return {
+    statusCode,
+    headers: Object.assign({
+      'Cache-Control': 'no-store'
+    }, headers || {}),
+    body: bodyBuffer.toString('base64'),
+    isBase64Encoded: true
+  };
+}
+
+function textResponse(statusCode, body, headers) {
+  return {
+    statusCode,
+    headers: Object.assign({
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Cache-Control': 'no-store'
+    }, headers || {}),
+    body
+  };
+}
+
 function parseBody(event) {
   if (!event.body) return {};
   try {
@@ -26,6 +48,109 @@ function parseBody(event) {
   } catch (err) {
     return {};
   }
+}
+
+function safeFilename(name, fallback) {
+  return String(name || fallback || 'render-studio-image.png')
+    .replace(/[^a-z0-9._-]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 90) || fallback || 'render-studio-image.png';
+}
+
+function safeRemoteImageUrl(rawUrl) {
+  const parsed = new URL(String(rawUrl || ''));
+  if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('Only http(s) image URLs can be downloaded.');
+  return parsed.toString();
+}
+
+async function fetchImageBuffer(rawUrl) {
+  const url = safeRemoteImageUrl(rawUrl);
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`Image download failed (${resp.status}).`);
+  const contentType = resp.headers.get('content-type') || 'image/png';
+  if (!/^image\//i.test(contentType)) throw new Error(`URL did not return an image (${contentType}).`);
+  const arr = await resp.arrayBuffer();
+  return { buffer: Buffer.from(arr), contentType };
+}
+
+function crc32(buffer) {
+  let crc = -1;
+  for (let i = 0; i < buffer.length; i++) {
+    crc ^= buffer[i];
+    for (let j = 0; j < 8; j++) {
+      crc = (crc >>> 1) ^ (0xEDB88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ -1) >>> 0;
+}
+
+function dosDateTime(date) {
+  const year = Math.max(1980, date.getFullYear());
+  const dosTime = (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2);
+  const dosDate = ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate();
+  return { dosTime, dosDate };
+}
+
+function createZip(files) {
+  const now = dosDateTime(new Date());
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+
+  files.forEach((file) => {
+    const name = Buffer.from(file.name);
+    const data = file.buffer;
+    const crc = crc32(data);
+
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0, 6);
+    local.writeUInt16LE(0, 8);
+    local.writeUInt16LE(now.dosTime, 10);
+    local.writeUInt16LE(now.dosDate, 12);
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(name.length, 26);
+    local.writeUInt16LE(0, 28);
+    localParts.push(local, name, data);
+
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(0, 8);
+    central.writeUInt16LE(0, 10);
+    central.writeUInt16LE(now.dosTime, 12);
+    central.writeUInt16LE(now.dosDate, 14);
+    central.writeUInt32LE(crc, 16);
+    central.writeUInt32LE(data.length, 20);
+    central.writeUInt32LE(data.length, 24);
+    central.writeUInt16LE(name.length, 28);
+    central.writeUInt16LE(0, 30);
+    central.writeUInt16LE(0, 32);
+    central.writeUInt16LE(0, 34);
+    central.writeUInt16LE(0, 36);
+    central.writeUInt32LE(0, 38);
+    central.writeUInt32LE(offset, 42);
+    centralParts.push(central, name);
+
+    offset += local.length + name.length + data.length;
+  });
+
+  const centralSize = centralParts.reduce((sum, part) => sum + part.length, 0);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(0, 4);
+  end.writeUInt16LE(0, 6);
+  end.writeUInt16LE(files.length, 8);
+  end.writeUInt16LE(files.length, 10);
+  end.writeUInt32LE(centralSize, 12);
+  end.writeUInt32LE(offset, 16);
+  end.writeUInt16LE(0, 20);
+
+  return Buffer.concat(localParts.concat(centralParts, end));
 }
 
 function parseClaudeJson(content) {
@@ -441,6 +566,45 @@ async function renderStatus(event) {
   return json(200, { slides });
 }
 
+async function downloadImage(event) {
+  const params = event.queryStringParameters || {};
+  const imageUrl = params.url;
+  const filename = safeFilename(params.filename || 'render-studio-slide.png', 'render-studio-slide.png');
+  if (!imageUrl) return json(400, { error: 'Missing image URL.' });
+
+  const image = await fetchImageBuffer(imageUrl);
+  return binary(200, image.buffer, {
+    'Content-Type': image.contentType,
+    'Content-Disposition': `attachment; filename="${filename}"`
+  });
+}
+
+async function downloadCarousel(event) {
+  const { slides, title } = parseBody(event);
+  const finishedSlides = Array.isArray(slides) ? slides.filter((slide) => slide && slide.imageUrl) : [];
+  if (!finishedSlides.length) return json(400, { error: 'No finished slides to download.' });
+
+  const files = [];
+  for (let i = 0; i < finishedSlides.length; i++) {
+    const slide = finishedSlides[i];
+    const image = await fetchImageBuffer(slide.imageUrl);
+    const extension = image.contentType.includes('jpeg') || image.contentType.includes('jpg') ? 'jpg'
+      : image.contentType.includes('webp') ? 'webp'
+        : 'png';
+    files.push({
+      name: safeFilename(`slide-${String(slide.n || i + 1).padStart(2, '0')}-${slide.hook || 'render'}.${extension}`, `slide-${i + 1}.${extension}`),
+      buffer: image.buffer
+    });
+  }
+
+  const zip = createZip(files);
+  const filename = safeFilename(`${title || 'render-studio-carousel'}.zip`, 'render-studio-carousel.zip');
+  return binary(200, zip, {
+    'Content-Type': 'application/zip',
+    'Content-Disposition': `attachment; filename="${filename.endsWith('.zip') ? filename : filename + '.zip'}"`
+  });
+}
+
 async function schedulePost(event) {
   if (!BLOTATO_API_KEY) throw new Error('BLOTATO_API_KEY is not set. Add it in Netlify Environment variables and redeploy.');
   if (!BLOTATO_INSTAGRAM_ACCOUNT_ID) throw new Error('BLOTATO_INSTAGRAM_ACCOUNT_ID is not set. Add it in Netlify Environment variables and redeploy.');
@@ -503,6 +667,8 @@ exports.handler = async (event) => {
     if (event.httpMethod === 'POST' && route === 'render-carousel') return await renderCarousel(event);
     if (event.httpMethod === 'POST' && route === 'render-slide') return await renderSlide(event);
     if (event.httpMethod === 'POST' && route === 'render-status') return await renderStatus(event);
+    if (event.httpMethod === 'GET' && route === 'download-image') return await downloadImage(event);
+    if (event.httpMethod === 'POST' && route === 'download-carousel') return await downloadCarousel(event);
     if (event.httpMethod === 'POST' && route === 'schedule') return await schedulePost(event);
     if (event.httpMethod === 'GET' && route === 'blotato/accounts') return await blotatoAccounts();
 
