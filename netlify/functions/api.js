@@ -673,6 +673,8 @@ Return ONLY a JSON object of this exact shape, no prose:
   {"tag": "a short 2-4 word concept label, e.g. Product Spotlight", "title": "a short post title", "concept": "one sentence describing the carousel's visual/creative concept", "caption": "a ready-to-post Instagram caption in the brand's voice, 2-4 sentences, natural, no hashtag spam"}
 ]}`;
 
+  console.log(`[generate-ideas] promptChars=${prompt.length} brandKnowledgeChars=${brandKnowledgeBlock.length}`);
+
   const parsed = await callClaude([{ role: 'user', content: prompt }]);
   const ideas = Array.isArray(parsed.ideas) ? parsed.ideas.slice(0, Number(count)) : [];
   if (!ideas.length) throw new Error('Claude did not return any ideas.');
@@ -698,8 +700,8 @@ ${topic}
 
 function buildBrandKnowledgeBlock(brandKnowledge) {
   if (!brandKnowledge || typeof brandKnowledge !== 'object') return '';
-  const identity = normalizeExtractedText(brandKnowledge.identityKitText || brandKnowledge.identityGuidance || '', 24000);
-  const campaign = normalizeExtractedText(brandKnowledge.campaignInspirationSummary || brandKnowledge.campaignGuidance || '', 16000);
+  const identity = normalizeExtractedText(brandKnowledge.identityKitText || brandKnowledge.identityGuidance || '', 8000);
+  const campaign = normalizeExtractedText(brandKnowledge.campaignInspirationSummary || brandKnowledge.campaignGuidance || '', 5000);
   if (!identity && !campaign) return '';
   return `
 ---
