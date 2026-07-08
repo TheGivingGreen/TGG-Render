@@ -45,7 +45,7 @@
 </head>
 <body>
 <div id="app"></div>
-<input type="file" id="rs-file-input" accept="image/*" style="display:none">
+<input type="file" id="rs-file-input" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none">
 <input type="file" id="rs-voice-file-input" accept=".txt,.md,text/plain,text/markdown" style="display:none">
 
 <script>
@@ -398,13 +398,26 @@
   function humanizeFilename(name) {
     return name.replace(/\.[^/.]+$/, '').replace(/[-_]+/g, ' ').replace(/\b\w/g, function (ch) { return ch.toUpperCase(); });
   }
+  function isSupportedImageUpload(file) {
+    var type = String(file.type || '').toLowerCase();
+    var name = String(file.name || '');
+    return ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif'].indexOf(type) !== -1 || /\.(png|jpe?g|webp|gif)$/i.test(name);
+  }
   function onFileChosen(file) {
     if (!file || !pendingUpload) return;
     var target = pendingUpload;
     pendingUpload = null;
+    if (!isSupportedImageUpload(file)) {
+      window.alert('Please upload a PNG, JPG, WebP, or GIF image. HEIC and other camera-native formats are not supported by the AI vision model.');
+      return;
+    }
     var reader = new FileReader();
     reader.onload = function () {
       var dataUrl = reader.result;
+      if (!/^data:image\/(png|jpe?g|webp|gif);base64,/i.test(String(dataUrl || ''))) {
+        window.alert('This image could not be read as a supported PNG, JPG, WebP, or GIF file.');
+        return;
+      }
       var label = humanizeFilename(file.name);
       if (target.kind === 'photo') {
         if (target.id == null) {

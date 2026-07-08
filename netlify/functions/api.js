@@ -50,6 +50,36 @@ function parseBody(event) {
   }
 }
 
+const SUPPORTED_UPLOADED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif']);
+
+function uploadedImageInfo(dataUrl) {
+  const raw = String(dataUrl || '');
+  const match = raw.match(/^data:([^;,]+);base64,([a-z0-9+/=\s]+)$/i);
+  if (!match) return { usable: false, reason: 'not a base64 data URL' };
+  const mimeType = match[1].toLowerCase();
+  if (!SUPPORTED_UPLOADED_IMAGE_TYPES.has(mimeType)) {
+    return { usable: false, mimeType, reason: `${mimeType} is not supported for AI vision` };
+  }
+  try {
+    const buffer = Buffer.from(match[2].replace(/\s+/g, ''), 'base64');
+    const detectedType = detectImageContentType(buffer, '');
+    if (!detectedType) return { usable: false, mimeType, reason: 'image bytes could not be recognized' };
+    return { usable: true, mimeType: detectedType };
+  } catch (err) {
+    return { usable: false, mimeType, reason: 'image data could not be decoded' };
+  }
+}
+
+function sanitizeUploadedPhotos(photos) {
+  return (Array.isArray(photos) ? photos : []).map((photo) => {
+    if (!photo || !photo.dataUrl) return photo;
+    const info = uploadedImageInfo(photo.dataUrl);
+    if (info.usable) return Object.assign({}, photo, { dataUrl: photo.dataUrl, hasUsableImage: true });
+    console.warn(`[asset skipped] ${photo.label || photo.id || 'untitled'}: ${info.reason}`);
+    return Object.assign({}, photo, { dataUrl: null, hasUsableImage: false, imageWarning: info.reason });
+  });
+}
+
 function safeFilename(name, fallback) {
   return String(name || fallback || 'render-studio-image.png')
     .replace(/[^a-z0-9._-]+/gi, '-')
@@ -500,7 +530,9 @@ function assetSummary(photos) {
   return photos.map((p) => ({
     id: p.id,
     label: p.label || 'Untitled asset',
-    role: p.role || 'reference'
+    role: p.role || 'reference',
+    hasUsableImage: !!p.dataUrl,
+    imageWarning: p.imageWarning || ''
   }));
 }
 
@@ -551,7 +583,8 @@ async function renderCarousel(event) {
   const { idea, frameCount, brand } = parseBody(event);
   if (!idea || !frameCount || !brand) return json(400, { error: 'Missing idea, frameCount, or brand.' });
 
-  const photos = Array.isArray(brand.photos) ? brand.photos : [];
+  const photos = sanitizeUploadedPhotos(brand.photos);
+  const brandForRender = Object.assign({}, brand, { photos });
   const photosForPrompt = assetSummary(photos);
 
   const pickText = `You are art-directing a ${frameCount}-slide Instagram carousel for "${brand.name}".
@@ -560,7 +593,7 @@ Concept: "${idea.concept}"
 Editable render prompt from the user: "${idea.renderPrompt || ''}"
 Available uploaded assets: ${JSON.stringify(photosForPrompt)}
 
-For each of the ${frameCount} slides, in story order, pick the single best-fitting uploaded asset id from the list above. Use each asset's role intentionally: product for hero/product shots, logo for brand marks, lifestyle for human/context imagery, texture for backgrounds, and reference for visual direction. Assets may repeat if needed. Also write a short, punchy 1-4 word uppercase hook line for that slide.
+For each of the ${frameCount} slides, in story order, pick the single best-fitting uploaded asset id from the list above. Prefer assets with hasUsableImage=true when visual fidelity matters. Assets with hasUsableImage=false can still inform the concept by label and role, but their image file was not sent to vision/rendering. Use each asset's role intentionally: product for hero/product shots, logo for brand marks, lifestyle for human/context imagery, texture for backgrounds, and reference for visual direction. Assets may repeat if needed. Also write a short, punchy 1-4 word uppercase hook line for that slide.
 
 Return ONLY a JSON object of this exact shape, no prose:
 {"slides": [{"n": 1, "photoId": null, "hook": "..."}]}`;
@@ -577,7 +610,7 @@ Return ONLY a JSON object of this exact shape, no prose:
   const renderJobId = Math.random().toString(36).slice(2, 10);
   console.log(`[render-carousel] renderJobId=${renderJobId} submitting ${slides.length} slide job(s)`);
 
-  const submitted = await Promise.all(slides.map((slide) => submitRenderedSlide({ brand, idea, slide })));
+  const submitted = await Promise.all(slides.map((slide) => submitRenderedSlide({ brand: brandForRender, idea, slide })));
 
   submitted.sort((a, b) => a.n - b.n);
   console.log(`[render-carousel] renderJobId=${renderJobId} submitted ${submitted.length} job(s)`);
@@ -590,7 +623,8 @@ async function renderSlide(event) {
   if (!idea || !brand || !slide) return json(400, { error: 'Missing idea, brand, or slide.' });
   if (!slide.n || !slide.hook) return json(400, { error: 'Missing slide number or hook.' });
 
-  const submitted = await submitRenderedSlide({ brand, idea, slide });
+  const brandForRender = Object.assign({}, brand, { photos: sanitizeUploadedPhotos(brand.photos) });
+  const submitted = await submitRenderedSlide({ brand: brandForRender, idea, slide });
   return json(200, { slide: submitted });
 }
 
