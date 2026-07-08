@@ -1,4 +1,7 @@
 const { fal } = require('@fal-ai/client');
+const pdfParse = require('pdf-parse');
+const mammoth = require('mammoth');
+const JSZip = require('jszip');
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'anthropic/claude-sonnet-5';
@@ -48,6 +51,20 @@ function parseBody(event) {
   } catch (err) {
     return {};
   }
+}
+
+function dataUrlToBuffer(dataUrl) {
+  const raw = String(dataUrl || '');
+  const match = raw.match(/^data:([^;,]+);base64,([a-z0-9+/=\s]+)$/i);
+  if (!match) throw new Error('Uploaded file was not sent as a base64 data URL.');
+  return {
+    mimeType: match[1].toLowerCase(),
+    buffer: Buffer.from(match[2].replace(/\s+/g, ''), 'base64')
+  };
+}
+
+function normalizeExtractedText(text, maxChars = 60000) {
+  return String(text || '').replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim().slice(0, maxChars);
 }
 
 const SUPPORTED_UPLOADED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif']);
@@ -348,6 +365,136 @@ async function callClaude(messages) {
   throw new Error(errors[0] || 'OpenRouter request failed.');
 }
 
+async function summarizeBrandKnowledge({ kind, fileName, fileType, text, imageDataUrl, zipEntries }) {
+  if (kind === 'identity') {
+    return {
+      summary: normalizeExtractedText(text, 12000),
+      guidance: normalizeExtractedText(text, 60000)
+    };
+  }
+
+  const nameLine = `File: ${fileName || 'Untitled'} (${fileType || 'unknown type'})`;
+  if (imageDataUrl) {
+    const visionContent = [
+      {
+        type: 'text',
+        text: `${nameLine}
+
+This is campaign inspiration/reference material for an Instagram carousel generator. Summarize the useful creative guidance: visual style, layout, mood, typography, colors, composition, subject matter, and anything to avoid.
+
+Return ONLY a JSON object of this exact shape:
+{"summary":"short useful summary","guidance":"creative guidance extracted from this reference"}`
+      },
+      { type: 'image_url', image_url: { url: imageDataUrl } }
+    ];
+    return await callClaude([{ role: 'user', content: visionContent }]);
+  }
+
+  const source = zipEntries && zipEntries.length
+    ? `ZIP entries:\n${zipEntries.join('\n')}\n\nExtracted text:\n${normalizeExtractedText(text, 16000)}`
+    : normalizeExtractedText(text, 16000);
+  if (!source) {
+    return {
+      summary: `${fileName || 'Campaign inspiration'} uploaded as ${fileType || 'a reference file'}.`,
+      guidance: 'Use this campaign inspiration as optional reference material by filename only; no extractable text was found.'
+    };
+  }
+
+  const prompt = `${nameLine}
+
+This is campaign inspiration/reference material for an Instagram carousel generator.
+
+Summarize the useful creative guidance for Claude idea generation. Focus on visual style, layout ideas, mood, typography, colors, composition, subject matter, references, and do/don't guidance. Keep it compact.
+
+SOURCE MATERIAL:
+${source}
+
+Return ONLY a JSON object of this exact shape:
+{"summary":"short useful summary","guidance":"creative guidance extracted from this reference"}`;
+  return await callClaude([{ role: 'user', content: prompt }]);
+}
+
+async function extractTextFromUpload(fileName, fileType, dataUrl) {
+  const lowerName = String(fileName || '').toLowerCase();
+  const { mimeType, buffer } = dataUrlToBuffer(dataUrl);
+  const effectiveType = String(fileType || mimeType || '').toLowerCase();
+
+  if (/\.(txt|md|markdown)$/i.test(lowerName) || /^text\//.test(effectiveType)) {
+    return { text: normalizeExtractedText(buffer.toString('utf8'), 60000), mimeType };
+  }
+
+  if (/\.pdf$/i.test(lowerName) || effectiveType === 'application/pdf') {
+    const parsed = await pdfParse(buffer);
+    return { text: normalizeExtractedText(parsed.text, 60000), mimeType };
+  }
+
+  if (/\.docx$/i.test(lowerName) || effectiveType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+    const parsed = await mammoth.extractRawText({ buffer });
+    return { text: normalizeExtractedText(parsed.value, 60000), mimeType };
+  }
+
+  if (/\.zip$/i.test(lowerName) || effectiveType === 'application/zip' || effectiveType === 'application/x-zip-compressed') {
+    const zip = await JSZip.loadAsync(buffer);
+    const entries = [];
+    const textChunks = [];
+    const files = Object.keys(zip.files).slice(0, 80);
+    for (const path of files) {
+      const entry = zip.files[path];
+      if (entry.dir) continue;
+      entries.push(path);
+      if (/\.(txt|md|markdown|csv)$/i.test(path) && textChunks.join('\n').length < 40000) {
+        textChunks.push(`--- ${path} ---\n${await entry.async('string')}`);
+      }
+    }
+    return { text: normalizeExtractedText(textChunks.join('\n\n'), 60000), mimeType, zipEntries: entries };
+  }
+
+  return { text: '', mimeType };
+}
+
+async function extractBrandKnowledge(event) {
+  const { kind, fileName, fileType, dataUrl } = parseBody(event);
+  if (!kind || !fileName || !dataUrl) return json(400, { error: 'Missing kind, fileName, or file data.' });
+  const normalizedKind = kind === 'identity' ? 'identity' : 'campaign';
+  const lowerName = String(fileName || '').toLowerCase();
+  const { mimeType } = dataUrlToBuffer(dataUrl);
+
+  if (normalizedKind === 'identity' && !(/\.(pdf|docx|txt|md|markdown)$/i.test(lowerName))) {
+    return json(400, { error: 'Brand Identity Kit must be a PDF, DOCX, TXT, or Markdown file.' });
+  }
+
+  const isCampaignImage = /^image\/(png|jpe?g|webp|gif)$/i.test(mimeType);
+  if (normalizedKind === 'campaign' && !isCampaignImage && !(/\.(pdf|docx|txt|md|markdown|zip)$/i.test(lowerName))) {
+    return json(400, { error: 'Campaign Inspiration must be a PDF, ZIP, image, TXT, or Markdown file.' });
+  }
+
+  let extracted = { text: '', mimeType, zipEntries: [] };
+  if (!isCampaignImage) extracted = await extractTextFromUpload(fileName, fileType || mimeType, dataUrl);
+
+  const summarized = await summarizeBrandKnowledge({
+    kind: normalizedKind,
+    fileName,
+    fileType: fileType || extracted.mimeType || mimeType,
+    text: extracted.text,
+    imageDataUrl: isCampaignImage ? dataUrl : '',
+    zipEntries: extracted.zipEntries || []
+  });
+
+  return json(200, {
+    item: {
+      id: Math.random().toString(36).slice(2, 10),
+      kind: normalizedKind,
+      fileName,
+      fileType: fileType || extracted.mimeType || mimeType,
+      text: normalizedKind === 'identity' ? (summarized.guidance || extracted.text || '') : '',
+      summary: summarized.summary || '',
+      guidance: summarized.guidance || summarized.summary || '',
+      zipEntries: extracted.zipEntries || [],
+      uploadedAt: new Date().toISOString()
+    }
+  });
+}
+
 async function submitSlideJob(prompt, referenceDataUrl) {
   if (!FAL_KEY) {
     throw new Error('FAL_KEY is not set. Add it in Netlify Environment variables and redeploy.');
@@ -496,13 +643,15 @@ Return ONLY JSON in this exact shape:
 }
 
 async function generateIdeas(event) {
-  const { topic, count, brand, brandVoice } = parseBody(event);
+  const { topic, count, brand, brandVoice, brandKnowledge } = parseBody(event);
   if (!topic || !count || !brand) return json(400, { error: 'Missing topic, count, or brand.' });
   const creativeDirectionBlock = buildCreativeDirectionBlock(topic, brandVoice);
+  const brandKnowledgeBlock = buildBrandKnowledgeBlock(brandKnowledge);
 
   const prompt = `You are the social media creative director for the brand "${brand.name}".
 Brand voice/vibe: ${(brand.vibeTags || []).join(', ')}.
 Brand colors (hex): ${(brand.colors || []).join(', ')}.
+${brandKnowledgeBlock}
 
 Write ${count} distinct Instagram carousel post ideas using this request:
 ${creativeDirectionBlock}
@@ -534,6 +683,19 @@ ${voice}
 ---
 CREATIVE DIRECTION:
 ${topic}
+---`;
+}
+
+function buildBrandKnowledgeBlock(brandKnowledge) {
+  if (!brandKnowledge || typeof brandKnowledge !== 'object') return '';
+  const identity = normalizeExtractedText(brandKnowledge.identityKitText || brandKnowledge.identityGuidance || '', 24000);
+  const campaign = normalizeExtractedText(brandKnowledge.campaignInspirationSummary || brandKnowledge.campaignGuidance || '', 16000);
+  if (!identity && !campaign) return '';
+  return `
+---
+BRAND KNOWLEDGE:
+${identity ? `Identity Kit Guidance:\n${identity}\n` : ''}
+${campaign ? `Campaign Inspiration Summary:\n${campaign}\n` : ''}
 ---`;
 }
 
@@ -753,6 +915,7 @@ exports.handler = async (event) => {
   try {
     if (event.httpMethod === 'GET' && route === 'config-status') return await configStatus();
     if (event.httpMethod === 'POST' && route === 'analyze-brand') return await analyzeBrand(event);
+    if (event.httpMethod === 'POST' && route === 'brand-knowledge/extract') return await extractBrandKnowledge(event);
     if (event.httpMethod === 'POST' && route === 'generate-ideas') return await generateIdeas(event);
     if (event.httpMethod === 'POST' && route === 'render-carousel') return await renderCarousel(event);
     if (event.httpMethod === 'POST' && route === 'render-slide') return await renderSlide(event);

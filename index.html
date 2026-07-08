@@ -47,6 +47,8 @@
 <div id="app"></div>
 <input type="file" id="rs-file-input" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none">
 <input type="file" id="rs-voice-file-input" accept=".txt,.md,text/plain,text/markdown" style="display:none">
+<input type="file" id="rs-identity-kit-input" accept=".pdf,.docx,.txt,.md,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" style="display:none">
+<input type="file" id="rs-campaign-inspiration-input" accept=".pdf,.docx,.txt,.md,.zip,image/png,image/jpeg,image/webp,image/gif,application/pdf,application/zip,application/x-zip-compressed,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple style="display:none">
 
 <script>
 (function () {
@@ -55,6 +57,7 @@
   var ACCENT = '#FF5A5F';
   var STORAGE_KEY = 'renderStudio.v1';
   var BRAND_VOICE_STORAGE_KEY = 'tgg_brand_voice';
+  var BRAND_KNOWLEDGE_STORAGE_KEY = 'tgg_brand_knowledge';
 
   var FONT_PAIRS = [
     { key: 'archivo-inter', name: 'Archivo Black', heading: "'Archivo Black', sans-serif", body: "'Inter', sans-serif" },
@@ -110,17 +113,12 @@
 
   function defaultBrand() {
     return {
-      name: 'ARCFORM',
-      colors: ['#15130F', '#F4EFE6', '#C1461D', '#6B7156'],
+      name: 'YOUR BRAND',
+      colors: ['#173F35', '#F5F0E3', '#FF5A5F', '#B9CBC1'],
       fontPairKey: 'archivo-inter',
-      vibeTags: ['Raw', 'Utilitarian', 'Street', 'Minimal'],
-      imagery: [{ id: 1, bg: '#2B2B2E' }],
-      photos: [
-        { id: 1, label: 'Cargo Pant - Front', role: 'product' },
-        { id: 2, label: 'Raw Hoodie - Detail', role: 'product' },
-        { id: 3, label: 'Studio - Lookbook', role: 'lifestyle' },
-        { id: 4, label: 'Utility Vest - Flat Lay', role: 'product' }
-      ]
+      vibeTags: [],
+      imagery: [],
+      photos: []
     };
   }
 
@@ -129,13 +127,13 @@
       darkMode: false,
       sidebarCollapsed: false,
       scheduledPopoverOpen: false,
-      brandUrl: 'https://arcform.com',
+      brandUrl: '',
       analyzing: false,
-      analyzed: true,
+      analyzed: false,
       activeSwatchIndex: null,
       newTagValue: '',
       brand: defaultBrand(),
-      topic: 'New drop: restocked cargo pants + raw-edge hoodie',
+      topic: '',
       ideaCount: 3,
       ideasLoading: false,
       ideas: [],
@@ -145,7 +143,18 @@
       analyzeError: null,
       configStatus: null,
       brandVoice: '',
-      brandVoiceExpanded: false
+      brandVoiceExpanded: false,
+      brandKnowledge: defaultBrandKnowledge()
+    };
+  }
+
+  function defaultBrandKnowledge() {
+    return {
+      expanded: false,
+      identityKit: null,
+      campaignInspiration: [],
+      loading: false,
+      error: null
     };
   }
 
@@ -164,6 +173,11 @@
     try {
       base.brandVoice = localStorage.getItem(BRAND_VOICE_STORAGE_KEY) || '';
     } catch (e) { /* brand voice storage unavailable, continue in-memory only */ }
+
+    try {
+      var rawKnowledge = localStorage.getItem(BRAND_KNOWLEDGE_STORAGE_KEY);
+      if (rawKnowledge) base.brandKnowledge = Object.assign(defaultBrandKnowledge(), JSON.parse(rawKnowledge));
+    } catch (e) { /* brand knowledge storage unavailable, continue in-memory only */ }
 
     var maxId = 100;
     (base.brand.photos || []).forEach(function (p) { if (p.id > maxId) maxId = p.id; });
@@ -232,6 +246,33 @@
   }
   function findIdea(id) { return state.ideas.find(function (i) { return i.id === id; }); }
 
+  function saveBrandKnowledgeNow(value) {
+    try {
+      localStorage.setItem(BRAND_KNOWLEDGE_STORAGE_KEY, JSON.stringify({
+        identityKit: value.identityKit || null,
+        campaignInspiration: value.campaignInspiration || []
+      }));
+    } catch (e) { /* storage unavailable, continue in-memory only */ }
+  }
+
+  function updateBrandKnowledge(patch) {
+    var next = Object.assign({}, state.brandKnowledge || defaultBrandKnowledge(), typeof patch === 'function' ? patch(state.brandKnowledge || defaultBrandKnowledge()) : patch);
+    set({ brandKnowledge: next });
+    saveBrandKnowledgeNow(next);
+  }
+
+  function brandKnowledgePayload() {
+    var knowledge = state.brandKnowledge || defaultBrandKnowledge();
+    var identity = knowledge.identityKit;
+    var campaign = knowledge.campaignInspiration || [];
+    return {
+      identityKitText: identity ? (identity.text || identity.guidance || identity.summary || '') : '',
+      campaignInspirationSummary: campaign.map(function (item) {
+        return [item.fileName, item.summary || '', item.guidance || ''].filter(Boolean).join(': ');
+      }).filter(Boolean).join('\n\n')
+    };
+  }
+
   function currentBrandVoice() {
     return String(state.brandVoice || '');
   }
@@ -279,7 +320,7 @@
   function toggleScheduledPopover() { set({ scheduledPopoverOpen: !state.scheduledPopoverOpen }); }
 
   function isDefaultSampleAsset(p) {
-    return !p.dataUrl && ['Cargo Pant - Front', 'Raw Hoodie - Detail', 'Studio - Lookbook', 'Utility Vest - Flat Lay'].indexOf(p.label) !== -1;
+    return false;
   }
 
   function normalizeAnalyzedAssetId(asset) {
@@ -395,6 +436,63 @@
     };
     reader.readAsText(file);
   }
+  function toggleBrandKnowledge() {
+    updateBrandKnowledge(function (k) { return { expanded: !k.expanded }; });
+  }
+  function triggerIdentityKitUpload() { document.getElementById('rs-identity-kit-input').click(); }
+  function triggerCampaignInspirationUpload() { document.getElementById('rs-campaign-inspiration-input').click(); }
+  function removeIdentityKit() { updateBrandKnowledge({ identityKit: null, error: null }); }
+  function removeCampaignInspiration(id) {
+    updateBrandKnowledge(function (k) {
+      return { campaignInspiration: (k.campaignInspiration || []).filter(function (item) { return item.id !== id; }), error: null };
+    });
+  }
+  function readFileAsDataUrl(file) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () { resolve(reader.result); };
+      reader.onerror = function () { reject(new Error('Could not read ' + file.name + '.')); };
+      reader.readAsDataURL(file);
+    });
+  }
+  function extractBrandKnowledgeFile(file, kind) {
+    return readFileAsDataUrl(file).then(function (dataUrl) {
+      return fetch('/api/brand-knowledge/extract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: kind, fileName: file.name, fileType: file.type || '', dataUrl: dataUrl })
+      }).then(parseJsonResponse).then(function (result) {
+        if (!result.ok) throw new Error((result.data && result.data.error) || 'Failed to extract brand knowledge.');
+        return result.data.item;
+      });
+    });
+  }
+  function onIdentityKitChosen(file) {
+    if (!file) return;
+    updateBrandKnowledge({ loading: true, error: null, expanded: true });
+    extractBrandKnowledgeFile(file, 'identity').then(function (item) {
+      updateBrandKnowledge(function (k) { return { identityKit: item, loading: false, error: null, expanded: k.expanded }; });
+    }).catch(function (err) {
+      updateBrandKnowledge({ loading: false, error: err.message, expanded: true });
+    });
+  }
+  function onCampaignInspirationChosen(files) {
+    var list = Array.prototype.slice.call(files || []);
+    if (!list.length) return;
+    updateBrandKnowledge({ loading: true, error: null, expanded: true });
+    Promise.all(list.map(function (file) { return extractBrandKnowledgeFile(file, 'campaign'); })).then(function (items) {
+      updateBrandKnowledge(function (k) {
+        return {
+          campaignInspiration: (k.campaignInspiration || []).concat(items).slice(-12),
+          loading: false,
+          error: null,
+          expanded: k.expanded
+        };
+      });
+    }).catch(function (err) {
+      updateBrandKnowledge({ loading: false, error: err.message, expanded: true });
+    });
+  }
   function humanizeFilename(name) {
     return name.replace(/\.[^/.]+$/, '').replace(/[-_]+/g, ' ').replace(/\b\w/g, function (ch) { return ch.toUpperCase(); });
   }
@@ -452,7 +550,7 @@
     fetch('/api/generate-ideas', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic: topic, count: count, brandVoice: currentBrandVoice(), brand: { name: brand.name, colors: brand.colors, vibeTags: brand.vibeTags } })
+      body: JSON.stringify({ topic: topic, count: count, brandVoice: currentBrandVoice(), brandKnowledge: brandKnowledgePayload(), brand: { name: brand.name, colors: brand.colors, vibeTags: brand.vibeTags } })
     }).then(parseJsonResponse).then(function (result) {
       if (!result.ok) throw new Error((result.data && result.data.error) || 'Failed to generate ideas.');
       var ideas = (result.data.ideas || []).map(function (c) {
@@ -989,6 +1087,48 @@
           '</div>' +
         '</div>' +
       '</div>';
+      var knowledge = state.brandKnowledge || defaultBrandKnowledge();
+      var identity = knowledge.identityKit;
+      var campaignItems = knowledge.campaignInspiration || [];
+      var brandKnowledgeDetails = knowledge.expanded ? (
+        '<div style="display:flex; flex-direction:column; gap:10px; margin-top:9px;">' +
+          '<div style="font-size:11.5px; color:' + theme.muted + '; line-height:1.45;">Optional files that improve creative direction.</div>' +
+          '<div style="border:1px solid ' + theme.border + '; border-radius:9px; padding:9px; background:' + theme.inputBg + '; display:flex; flex-direction:column; gap:8px;">' +
+            '<div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">' +
+              '<div style="font-size:12px; font-weight:800; color:' + theme.text + ';">Brand Identity Kit</div>' +
+              '<button type="button" data-action="upload-identity-kit" style="border:1px solid ' + theme.border + '; border-radius:8px; padding:6px 9px; background:' + theme.chipBg + '; color:' + theme.text + '; font:inherit; font-size:11px; font-weight:800; cursor:pointer;">Upload</button>' +
+            '</div>' +
+            (identity ? '<div style="display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:11px; color:' + theme.muted + '; line-height:1.35;"><span style="min-width:0; word-break:break-word;">' + esc(identity.fileName) + '</span><span data-action="remove-identity-kit" style="color:' + ACCENT + '; cursor:pointer; font-weight:800;">Remove</span></div>' : '<div style="font-size:11px; color:' + theme.muted + ';">No identity kit loaded.</div>') +
+          '</div>' +
+          '<div style="border:1px solid ' + theme.border + '; border-radius:9px; padding:9px; background:' + theme.inputBg + '; display:flex; flex-direction:column; gap:8px;">' +
+            '<div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">' +
+              '<div style="font-size:12px; font-weight:800; color:' + theme.text + ';">Campaign Inspiration</div>' +
+              '<button type="button" data-action="upload-campaign-inspiration" style="border:1px solid ' + theme.border + '; border-radius:8px; padding:6px 9px; background:' + theme.chipBg + '; color:' + theme.text + '; font:inherit; font-size:11px; font-weight:800; cursor:pointer;">Upload</button>' +
+            '</div>' +
+            (campaignItems.length ? campaignItems.map(function (item) {
+              return '<div style="display:flex; align-items:flex-start; justify-content:space-between; gap:8px; font-size:11px; color:' + theme.muted + '; line-height:1.35;">' +
+                '<div style="min-width:0;"><div style="word-break:break-word; color:' + theme.text + '; font-weight:700;">' + esc(item.fileName) + '</div><div>' + esc(item.summary || 'Reference summarized.') + '</div></div>' +
+                '<span data-action="remove-campaign-inspiration" data-id="' + esc(item.id) + '" style="color:' + ACCENT + '; cursor:pointer; font-weight:800;">Remove</span>' +
+              '</div>';
+            }).join('') : '<div style="font-size:11px; color:' + theme.muted + ';">No inspiration loaded.</div>') +
+          '</div>' +
+          '<div style="border:1px dashed ' + theme.border + '; border-radius:9px; padding:9px; color:' + theme.muted + '; font-size:11.5px; display:flex; justify-content:space-between; gap:8px; opacity:0.72;">' +
+            '<span>Brand Understanding</span><span>Coming later</span>' +
+          '</div>' +
+          (knowledge.loading ? '<div style="font-size:11px; color:' + theme.muted + ';">Extracting brand knowledge...</div>' : '') +
+          (knowledge.error ? '<div style="font-size:11px; color:#C0392B; line-height:1.35;">' + esc(knowledge.error) + '</div>' : '') +
+        '</div>'
+      ) : '';
+      var brandKnowledgeBlock = '<div>' +
+        '<div data-action="toggle-brand-knowledge" style="display:flex; align-items:center; justify-content:space-between; gap:8px; cursor:pointer;">' +
+          '<div>' +
+            '<div style="font:var(--text-utility-xs); color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:5px;">Brand Knowledge</div>' +
+            '<div style="font-size:11.5px; color:' + theme.muted + '; line-height:1.45;">Help Render Studio understand your brand more deeply. These files improve creative consistency but are optional.</div>' +
+          '</div>' +
+          '<div style="color:' + theme.muted + '; font-size:16px;">' + (knowledge.expanded ? '−' : '+') + '</div>' +
+        '</div>' +
+        brandKnowledgeDetails +
+      '</div>';
 
       var imagery = brand.imagery.map(function (im) {
         var imBg = im.dataUrl ? ('background-image:url(' + im.dataUrl + '); background-size:cover; background-position:center;') : ('background:' + im.bg + ';');
@@ -1047,6 +1187,7 @@
             '</div>' +
           '</div>' +
           brandVoiceBlock +
+          brandKnowledgeBlock +
           '<div>' +
             '<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">' +
               '<div style="font:var(--text-utility-xs); color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.06em;">Imagery</div>' +
@@ -1091,7 +1232,7 @@
     var directionBar = '<div style="background:' + theme.cardBg + '; border:1px solid ' + theme.border + '; box-shadow:' + theme.shadow + '; border-radius:16px; padding:22px; display:flex; gap:18px; align-items:flex-end; flex-wrap:wrap;">' +
       '<div style="flex:2; min-width:260px;">' +
         '<div style="font:var(--text-utility-xs); color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:9px;">Your creative direction</div>' +
-        '<textarea data-bind="topic" placeholder="e.g. New drop: restocked cargo pants + raw-edge hoodie" rows="2" style="width:100%; resize:vertical; font-family:inherit; font-size:14px; padding:11px 13px; border:1px solid ' + theme.border + '; border-radius:12px; background:' + theme.inputBg + '; color:' + theme.text + ';">' + esc(state.topic) + '</textarea>' +
+        '<textarea data-bind="topic" placeholder="e.g. Announce a seasonal campaign, new offer, event, or product story" rows="2" style="width:100%; resize:vertical; font-family:inherit; font-size:14px; padding:11px 13px; border:1px solid ' + theme.border + '; border-radius:12px; background:' + theme.inputBg + '; color:' + theme.text + ';">' + esc(state.topic) + '</textarea>' +
       '</div>' +
       '<div>' +
         '<div style="font:var(--text-utility-xs); color:' + theme.muted + '; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:9px;"># of ideas</div>' +
@@ -1417,6 +1558,11 @@
       case 'toggle-brand-voice': toggleBrandVoice(); break;
       case 'upload-brand-voice': triggerBrandVoiceUpload(); break;
       case 'clear-brand-voice': clearBrandVoice(); break;
+      case 'toggle-brand-knowledge': toggleBrandKnowledge(); break;
+      case 'upload-identity-kit': triggerIdentityKitUpload(); break;
+      case 'remove-identity-kit': removeIdentityKit(); break;
+      case 'upload-campaign-inspiration': triggerCampaignInspirationUpload(); break;
+      case 'remove-campaign-inspiration': removeCampaignInspiration(id); break;
       case 'add-imagery': triggerUpload('imagery', null); break;
       case 'replace-imagery': triggerUpload('imagery', idNum); break;
       case 'add-photo': triggerUpload('photo', null); break;
@@ -1497,6 +1643,18 @@
     var file = e.target.files && e.target.files[0];
     e.target.value = '';
     onBrandVoiceFileChosen(file);
+  });
+
+  document.getElementById('rs-identity-kit-input').addEventListener('change', function (e) {
+    var file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    onIdentityKitChosen(file);
+  });
+
+  document.getElementById('rs-campaign-inspiration-input').addEventListener('change', function (e) {
+    var files = e.target.files;
+    e.target.value = '';
+    onCampaignInspirationChosen(files);
   });
 
   fetch('/api/config-status').then(function (r) { return r.json(); }).then(function (data) {

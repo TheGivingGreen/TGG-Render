@@ -8,7 +8,9 @@
     "build": "echo \"No build step required\""
   },
   "dependencies": {
-    "@fal-ai/client": "^1.2.3"
-  },
-  "devDependencies": {}
+    "@fal-ai/client": "^1.2.3",
+    "jszip": "^3.10.1",
+    "mammoth": "^1.12.0",
+    "pdf-parse": "^2.4.5"
+  }
 }
