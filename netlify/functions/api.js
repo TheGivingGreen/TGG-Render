@@ -367,7 +367,18 @@ async function submitSlideJob(prompt, referenceDataUrl) {
     hasReferenceImage: !!referenceDataUrl
   }));
 
-  const queued = await fal.queue.submit(endpoint, { input });
+  let queued;
+  try {
+    queued = await fal.queue.submit(endpoint, { input });
+  } catch (err) {
+    console.error(`[fal submit] ${endpoint} failed:`, err);
+    const status = err && (err.status || err.statusCode || err.code);
+    const message = String((err && err.message) || '');
+    if (status === 401 || status === 403 || /\b(401|403|forbidden|unauthorized)\b/i.test(message)) {
+      throw new Error('Fal rejected the render request. Check FAL_KEY in Netlify and confirm this key has access to openai/gpt-image-2.');
+    }
+    throw err;
+  }
   console.log(`[fal submit] <- ${endpoint} request_id=${queued.request_id}`);
   return { endpoint, requestId: queued.request_id };
 }
