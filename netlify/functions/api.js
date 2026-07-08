@@ -1,5 +1,5 @@
 const { fal } = require('@fal-ai/client');
-const pdfParse = require('pdf-parse');
+const { PDFParse } = require('pdf-parse');
 const mammoth = require('mammoth');
 const JSZip = require('jszip');
 
@@ -8,6 +8,8 @@ const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'anthropic/claude-sonne
 const FAL_KEY = process.env.FAL_KEY || '';
 const BLOTATO_API_KEY = process.env.BLOTATO_API_KEY || '';
 const BLOTATO_INSTAGRAM_ACCOUNT_ID = process.env.BLOTATO_INSTAGRAM_ACCOUNT_ID || '';
+const BRAND_KNOWLEDGE_MAX_BYTES = 4 * 1024 * 1024;
+const BRAND_KNOWLEDGE_SIZE_ERROR = 'This file is too large for Brand Knowledge v1. Please upload a smaller PDF, DOCX, TXT, MD, image, or ZIP file.';
 
 if (FAL_KEY) fal.config({ credentials: FAL_KEY });
 
@@ -424,8 +426,13 @@ async function extractTextFromUpload(fileName, fileType, dataUrl) {
   }
 
   if (/\.pdf$/i.test(lowerName) || effectiveType === 'application/pdf') {
-    const parsed = await pdfParse(buffer);
-    return { text: normalizeExtractedText(parsed.text, 60000), mimeType };
+    const parser = new PDFParse({ data: buffer });
+    try {
+      const parsed = await parser.getText();
+      return { text: normalizeExtractedText(parsed.text, 60000), mimeType };
+    } finally {
+      await parser.destroy();
+    }
   }
 
   if (/\.docx$/i.test(lowerName) || effectiveType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
@@ -457,7 +464,10 @@ async function extractBrandKnowledge(event) {
   if (!kind || !fileName || !dataUrl) return json(400, { error: 'Missing kind, fileName, or file data.' });
   const normalizedKind = kind === 'identity' ? 'identity' : 'campaign';
   const lowerName = String(fileName || '').toLowerCase();
-  const { mimeType } = dataUrlToBuffer(dataUrl);
+  const { mimeType, buffer } = dataUrlToBuffer(dataUrl);
+  if (buffer.length > BRAND_KNOWLEDGE_MAX_BYTES) {
+    return json(413, { error: BRAND_KNOWLEDGE_SIZE_ERROR });
+  }
 
   if (normalizedKind === 'identity' && !(/\.(pdf|docx|txt|md|markdown)$/i.test(lowerName))) {
     return json(400, { error: 'Brand Identity Kit must be a PDF, DOCX, TXT, or Markdown file.' });

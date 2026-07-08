@@ -58,6 +58,8 @@
   var STORAGE_KEY = 'renderStudio.v1';
   var BRAND_VOICE_STORAGE_KEY = 'tgg_brand_voice';
   var BRAND_KNOWLEDGE_STORAGE_KEY = 'tgg_brand_knowledge';
+  var BRAND_KNOWLEDGE_MAX_BYTES = 4 * 1024 * 1024;
+  var BRAND_KNOWLEDGE_SIZE_ERROR = 'This file is too large for Brand Knowledge v1. Please upload a smaller PDF, DOCX, TXT, MD, image, or ZIP file.';
 
   var FONT_PAIRS = [
     { key: 'archivo-inter', name: 'Archivo Black', heading: "'Archivo Black', sans-serif", body: "'Inter', sans-serif" },
@@ -456,6 +458,9 @@
     });
   }
   function extractBrandKnowledgeFile(file, kind) {
+    if (file.size > BRAND_KNOWLEDGE_MAX_BYTES) {
+      return Promise.reject(new Error(BRAND_KNOWLEDGE_SIZE_ERROR));
+    }
     return readFileAsDataUrl(file).then(function (dataUrl) {
       return fetch('/api/brand-knowledge/extract', {
         method: 'POST',
